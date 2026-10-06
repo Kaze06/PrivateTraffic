@@ -15,8 +15,8 @@ The initial scope is one to three camera sources from one provider, with permitt
 
 ## Team
 
-- 宋子安 1240008286 (leader)
-- 陈佳骏 1240000551
-- 姚子严 1230020566
+- Zian Song 1240008286 (leader)
+- Jiajun Chen 1240000551
+- Ziyan Yao 1230020566
 
 Individual strengths and functional ownership will be confirmed by the team before implementation.
