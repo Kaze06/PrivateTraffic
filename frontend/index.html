@@ -81,7 +81,32 @@
         ⚠️ Potential Viewpoint / PTZ Shift: Backup candidate feeds available.
       </div>
 
-      <button id="btn-toggle-follow" class="follow-btn" style="display: none;">Follow this Location</button>
+      <button id="btn-toggle-follow" class="follow-btn" style="display: none; margin-bottom: 8px;">Follow this Location</button>
+
+      <!-- Backup Video Management Section -->
+      <details style="margin-top: 6px; font-size: 0.75rem; background: #f1f5f9; padding: 6px 8px; border-radius: 4px; border: 1px solid #cbd5e1;">
+        <summary style="cursor: pointer; font-weight: 600; color: #334155;">📁 Manage Backup Videos & Replays</summary>
+        <form id="replay-upload-form" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
+          <div>
+            <label style="display: block; font-size: 0.68rem; color: #64748b;">Target Camera Code:</label>
+            <input type="text" id="upload-cam-code" placeholder="e.g. C8351" style="width: 100%; padding: 4px; font-size: 0.75rem; border: 1px solid #cbd5e1; border-radius: 4px;" required />
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.68rem; color: #64748b;">Select Local MP4 Clip:</label>
+            <input type="file" id="upload-video-file" accept="video/mp4,video/x-m4v,video/*" style="font-size: 0.72rem;" required />
+          </div>
+          <button type="submit" id="btn-submit-replay" style="padding: 5px 8px; font-size: 0.75rem; background: #0f172a; color: white; border: none; border-radius: 4px; cursor: pointer;">
+            Upload & Set as Replay Mode
+          </button>
+        </form>
+
+        <div style="margin-top: 10px; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
+          <button type="button" id="btn-purge-replays" style="width: 100%; padding: 5px 8px; font-size: 0.72rem; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+            🗑️ Purge All Backups & Reset to Live
+          </button>
+        </div>
+        <div id="upload-msg" style="font-size: 0.7rem; margin-top: 6px;"></div>
+      </details>
     </div>
 
     <div class="list-section">

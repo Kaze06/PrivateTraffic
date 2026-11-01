@@ -6,6 +6,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 JSON_511MN_PATH = os.getenv("JSON_511MN_PATH", str(BASE_DIR / "511MN.json"))
 PILOT_CAMERAS_PATH = os.getenv("PILOT_CAMERAS_PATH", str(BASE_DIR / "pilot_cameras.json"))
 DATABASE_PATH = os.getenv("DATABASE_PATH", str(BASE_DIR / "traffic.db"))
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_DIR / "uploads"))
+
+# Ensure upload directory exists
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 STALE_THRESHOLD_SECONDS = 60
 OFFLINE_THRESHOLD_SECONDS = 180

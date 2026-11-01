@@ -1,11 +1,13 @@
+import os
+import shutil
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 
 from app.database import get_db
-from app.config import SOURCE_ATTRIBUTION, DATA_RETENTION_POLICY
+from app.config import SOURCE_ATTRIBUTION, DATA_RETENTION_POLICY, UPLOAD_DIR
 from app.models import CameraSourceModel, TrafficMeasurementModel
 from app.schemas import (
     CameraItem, 
@@ -33,6 +35,77 @@ def get_source_compliance():
         ptz_mitigation="Pre-vetted multi-camera failover pool configured in pilot_cameras.json",
         gps_policy="Strictly GPS-free; user locations are never requested or stored."
     )
+
+@router.post("/upload-replay")
+async def upload_backup_replay(
+    camera_code: str = Form(..., example="C8351"),
+    video_file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Allows uploading pre-recorded backup video footage to substitute for live streams
+    during maintenance or demo PTZ degradation.
+    """
+    cam = db.query(CameraSourceModel).filter(CameraSourceModel.camera_code == camera_code).first()
+    if not cam:
+        raise HTTPException(status_code=404, detail=f"No camera found with code: {camera_code}")
+
+    clean_filename = f"{camera_code}_backup_{int(datetime.now().timestamp())}.mp4"
+    disk_path = os.path.join(UPLOAD_DIR, clean_filename)
+    
+    with open(disk_path, "wb") as buffer:
+        shutil.copyfileobj(video_file.file, buffer)
+
+    web_accessible_url = f"/uploads/{clean_filename}"
+    cam.stream_url = web_accessible_url
+    cam.current_status = "replay_not_live"
+    cam.last_measurement_time = datetime.now(timezone.utc)
+    db.commit()
+
+    return {
+        "status": "success",
+        "camera_id": cam.id,
+        "camera_code": cam.camera_code,
+        "mode": "replay_not_live",
+        "stream_url": web_accessible_url,
+        "message": f"Backup video configured for {camera_code}. Source set to 'replay_not_live'."
+    }
+
+@router.post("/purge-replays")
+def purge_all_replays(db: Session = Depends(get_db)):
+    """
+    Deletes all uploaded video files from disk and resets camera stream URLs
+    back to native MnDOT live HLS streams.
+    """
+    # 1. Delete all uploaded MP4s in UPLOAD_DIR
+    deleted_files = 0
+    if os.path.exists(UPLOAD_DIR):
+        for fname in os.listdir(UPLOAD_DIR):
+            fpath = os.path.join(UPLOAD_DIR, fname)
+            try:
+                if os.path.isfile(fpath) or os.path.islink(fpath):
+                    os.unlink(fpath)
+                    deleted_files += 1
+            except Exception as e:
+                pass
+
+    # 2. Reset cameras back to native MnDOT URLs
+    cams = db.query(CameraSourceModel).all()
+    reset_count = 0
+    for cam in cams:
+        if cam.camera_code:
+            cam.stream_url = f"https://video.dot.state.mn.us/public/{cam.camera_code}.stream/playlist.m3u8"
+            if cam.current_status == "replay_not_live":
+                cam.current_status = "initializing"
+                reset_count += 1
+
+    db.commit()
+    return {
+        "status": "success",
+        "deleted_files": deleted_files,
+        "cameras_reset": reset_count,
+        "message": f"Purged {deleted_files} files. Restored {reset_count} cameras back to native live stream."
+    }
 
 @router.get("/{camera_id:path}/status", response_model=CurrentStatusResponse)
 def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):

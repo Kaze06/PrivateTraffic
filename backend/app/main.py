@@ -1,16 +1,17 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
+from app.config import UPLOAD_DIR
 from app.database import Base, engine, SessionLocal
 from app.camera_service import initialize_camera_database
 from app.health_monitor import start_staleness_monitor
 from app.routers import cameras, measurements
 
-# Lifespan event replaces deprecated on_event
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 1. Ensure DB tables exist locally
@@ -26,7 +27,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="PrivateTraffic Core API", version="0.9", lifespan=lifespan)
 
-# Allow local frontend calls
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,6 +38,10 @@ app.add_middleware(
 # API Routers
 app.include_router(cameras.router)
 app.include_router(measurements.router)
+
+# Mount uploaded backup videos for browser playback (AVA-1.2)
+if os.path.exists(UPLOAD_DIR):
+    app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Mount Frontend static files
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"

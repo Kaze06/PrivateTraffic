@@ -1,3 +1,6 @@
+// PrivateTraffic - Location Selection & Current Status
+// Defensively handles GPS-free storage, MP4/HLS dual playback, RA1 state-transitions, and PTZ failover
+
 const API_BASE = "/api";
 let map, markerGroup;
 let allCameras = [];
@@ -101,7 +104,7 @@ async function loadCameras() {
   renderList();
 
   const defaultPilot = allCameras.find(c => c.is_pilot);
-  if (defaultPilot) {
+  if (defaultPilot && !selectedCameraId) {
     selectCamera(defaultPilot.id);
   }
 }
@@ -134,7 +137,11 @@ function renderMarkers(filterRoad = "") {
   });
 }
 
-function playRawHls(streamUrl) {
+/**
+ * Universal Media Player: Automatically plays either native HLS stream (.m3u8)
+ * or uploaded backup MP4 video file (/uploads/...).
+ */
+function playMedia(streamUrl, isReplay = false) {
   const video = document.getElementById("raw-video-player");
   const streamBadge = document.getElementById("badge-stream-state");
   if (!video || !streamUrl) {
@@ -145,6 +152,27 @@ function playRawHls(streamUrl) {
     return;
   }
 
+  // Teardown previous instances
+  if (currentHls) {
+    currentHls.destroy();
+    currentHls = null;
+  }
+
+  // CASE 1: Uploaded Backup MP4 Video (Direct HTML5 playback)
+  if (streamUrl.endsWith(".mp4") || streamUrl.includes("/uploads/")) {
+    video.removeAttribute("src");
+    video.src = streamUrl;
+    video.loop = true; // Auto-loop backup footage for smooth demo
+    video.play().catch(e => console.warn("Autoplay notice:", e));
+
+    if (streamBadge) {
+      streamBadge.className = "badge badge-replay";
+      streamBadge.textContent = "● Recorded Clip - Not Live";
+    }
+    return;
+  }
+
+  // CASE 2: Live HLS Stream (.m3u8)
   if (streamBadge) {
     streamBadge.className = "badge badge-stream-idle";
     streamBadge.textContent = "● Stream: Connecting...";
@@ -157,8 +185,8 @@ function playRawHls(streamUrl) {
 
     currentHls.on(Hls.Events.MANIFEST_PARSED, () => {
       if (streamBadge) {
-        streamBadge.className = "badge badge-stream-active";
-        streamBadge.textContent = "● Stream: Live (MnDOT)";
+        streamBadge.className = isReplay ? "badge badge-replay" : "badge badge-stream-active";
+        streamBadge.textContent = isReplay ? "● Recorded Clip - Not Live" : "● Stream: Live (MnDOT)";
       }
       video.play().catch(() => {});
     });
@@ -173,8 +201,8 @@ function playRawHls(streamUrl) {
     video.src = streamUrl;
     video.addEventListener('loadedmetadata', () => {
       if (streamBadge) {
-        streamBadge.className = "badge badge-stream-active";
-        streamBadge.textContent = "● Stream: Live (MnDOT)";
+        streamBadge.className = isReplay ? "badge badge-replay" : "badge badge-stream-active";
+        streamBadge.textContent = isReplay ? "● Recorded Clip - Not Live" : "● Stream: Live (MnDOT)";
       }
       video.play().catch(() => {});
     });
@@ -205,7 +233,7 @@ function setVideoDisplayMode(mode, hasAugmented) {
     if (rawVideo) {
       rawVideo.style.display = "block";
       if (cam && cam.stream_url) {
-        playRawHls(cam.stream_url);
+        playMedia(cam.stream_url, cam.current_status === "replay_not_live");
       }
     }
   } else {
@@ -250,12 +278,12 @@ async function fetchCurrentStatus(cameraId) {
     const titleEl = document.getElementById("card-cam-title");
     if (titleEl) titleEl.textContent = statusData.camera_title;
 
+    // Analytics Freshness Badge mapping RA1 Figure 5-5
     const badge = document.getElementById("card-cam-badge");
     if (badge) {
       if (statusData.status === "stale") {
         badge.className = "badge badge-stale";
         badge.textContent = "State: Stale (>60s)";
-        badge.title = "No new inference update within 60s.";
       } else if (statusData.status === "live_fresh" || statusData.status === "live") {
         badge.className = "badge badge-live";
         badge.textContent = "State: Live Fresh";
@@ -274,6 +302,13 @@ async function fetchCurrentStatus(cameraId) {
       }
     }
 
+    // Auto-fill the upload form camera code with currently selected camera
+    const uploadInput = document.getElementById("upload-cam-code");
+    if (uploadInput && statusData.camera_code && !uploadInput.value) {
+      uploadInput.value = statusData.camera_code;
+    }
+
+    // PTZ Failover Indicator
     const ptzBox = document.getElementById("ptz-failover-box");
     if (ptzBox) {
       if (statusData.status === "stale" || statusData.status === "offline") {
@@ -350,6 +385,12 @@ function selectCamera(cameraId) {
   const displayArea = document.getElementById("video-display-area");
   if (displayArea) displayArea.style.display = "block";
 
+  // Pre-fill upload code input
+  const uploadInput = document.getElementById("upload-cam-code");
+  if (uploadInput && cam.camera_code) {
+    uploadInput.value = cam.camera_code;
+  }
+
   updateFollowButtonState();
   setVideoDisplayMode("raw", false);
   fetchCurrentStatus(cameraId);
@@ -404,6 +445,7 @@ function renderList() {
   `).join('');
 }
 
+// Global Event Listeners
 window.addEventListener("DOMContentLoaded", () => {
   initMap();
   updateFollowCount();
@@ -443,6 +485,52 @@ window.addEventListener("DOMContentLoaded", () => {
       });
     });
   }
+
+  // Backup Video Upload Submission Handler
+  const uploadForm = document.getElementById("replay-upload-form");
+  if (uploadForm) {
+    uploadForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const camCode = document.getElementById("upload-cam-code").value.trim();
+      const fileInput = document.getElementById("upload-video-file");
+      const msg = document.getElementById("upload-msg");
+
+      if (!camCode || fileInput.files.length === 0) {
+        msg.innerHTML = "<span style='color:red;'>Enter camera code and select a video file.</span>";
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("camera_code", camCode);
+      formData.append("video_file", fileInput.files[0]);
+
+      msg.innerHTML = "<span style='color:#2563eb;'>Uploading video clip...</span>";
+
+      try {
+        const res = await fetch(`${API_BASE}/cameras/upload-replay`, {
+          method: "POST",
+          body: formData
+        });
+        const data = await res.json();
+        if (res.ok) {
+          msg.innerHTML = `<span style='color:green;'>✔ Backup video active for ${camCode}!</span>`;
+          
+          // Refresh cameras and immediately switch active player to new upload
+          await loadCameras();
+          const targetCam = allCameras.find(c => c.camera_code === camCode);
+          if (targetCam) {
+            targetCam.stream_url = data.stream_url;
+            targetCam.current_status = "replay_not_live";
+            selectCamera(targetCam.id);
+          }
+        } else {
+          msg.innerHTML = `<span style='color:red;'>Error: ${data.detail || "Upload failed"}</span>`;
+        }
+      } catch (err) {
+        msg.innerHTML = `<span style='color:red;'>Network error uploading file.</span>`;
+      }
+    });
+  }
 });
 
 function switchTab(tab) {
@@ -459,4 +547,36 @@ function switchTab(tab) {
 
 window.addEventListener("beforeunload", () => {
   stopActiveStreams();
+});
+
+// Handler for Purging All Backup Videos
+document.addEventListener("DOMContentLoaded", () => {
+  const purgeBtn = document.getElementById("btn-purge-replays");
+  if (!purgeBtn) return;
+
+  purgeBtn.addEventListener("click", async () => {
+    if (!confirm("Are you sure you want to delete all uploaded backup files and restore native live streams?")) {
+      return;
+    }
+
+    const msg = document.getElementById("upload-msg");
+    msg.innerHTML = "<span style='color:#ef4444;'>Purging files and resetting streams...</span>";
+
+    try {
+      const res = await fetch(`${API_BASE}/cameras/purge-replays`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        msg.innerHTML = `<span style='color:green;'>✔ ${data.message}</span>`;
+        // Reload camera catalog and refresh active view
+        await loadCameras();
+        if (selectedCameraId) {
+          selectCamera(selectedCameraId);
+        }
+      } else {
+        msg.innerHTML = `<span style='color:red;'>Error: ${data.detail || "Purge failed"}</span>`;
+      }
+    } catch (err) {
+      msg.innerHTML = "<span style='color:red;'>Network error purging replays.</span>";
+    }
+  });
 });
