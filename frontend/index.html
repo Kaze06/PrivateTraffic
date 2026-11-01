@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="no-referrer-when-downgrade" />
+  <title>PrivateTraffic - Location & Status Monitor</title>
+
+  <link 
+    rel="stylesheet" 
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
+  <link rel="stylesheet" href="./css/styles.css" />
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <h1>PrivateTraffic</h1>
+      <p>GPS-Free Pilot Traffic Camera Status (MnDOT)</p>
+    </div>
+
+    <div class="controls-area">
+      <input type="text" id="search-box" class="search-input" placeholder="Search roads (e.g. I-35W, MN 55)..." />
+      <div class="tab-row">
+        <button id="tab-pilot" class="tab-btn active">Pilot Cameras</button>
+        <button id="tab-all" class="tab-btn">All Cameras</button>
+        <button id="tab-followed" class="tab-btn">Followed (<span id="follow-count">0</span>)</button>
+      </div>
+    </div>
+
+    <div id="active-card">
+      <div class="card-header">
+        <div id="card-cam-title" class="card-title">Select a location</div>
+        <div class="status-badge-group">
+          <span id="badge-stream-state" class="badge badge-stream-idle">● Stream: Idle</span>
+          <span id="card-cam-badge" class="badge badge-unavailable">State: Initializing</span>
+        </div>
+      </div>
+
+      <div id="video-display-area" style="display: none;">
+        <div class="video-mode-bar">
+          <button id="btn-mode-raw" class="vmode-btn active">📹 Raw Stream (MnDOT)</button>
+          <button id="btn-mode-augmented" class="vmode-btn">⚡ YOLO Augmented</button>
+        </div>
+
+        <div class="media-frame-wrapper">
+          <video id="raw-video-player" controls autoplay muted playsinline></video>
+          <img id="augmented-image-feed" alt="Augmented stream loading..." style="display: none;" />
+
+          <div id="cv-offline-notice" style="display: none;" class="stream-overlay-notice">
+            <span>YOLO Inference Pipeline Offline</span>
+            <small>Model is not currently submitting inference frames. Switched to raw camera view.</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="metrics-grid">
+        <div class="metric-box">
+          <div id="val-count" class="metric-val">--</div>
+          <div class="metric-lbl">Count</div>
+        </div>
+        <div class="metric-box">
+          <div id="val-flow" class="metric-val">--</div>
+          <div class="metric-lbl">Flow (veh/min)</div>
+        </div>
+        <div class="metric-box">
+          <div id="val-level" class="metric-val">--</div>
+          <div class="metric-lbl">Traffic Level</div>
+        </div>
+      </div>
+
+      <div class="measurement-note" id="val-updated">
+        Measurement Time: Not available
+      </div>
+
+      <div id="ptz-failover-box" style="display:none; font-size: 0.72rem; color: #b45309; background: #fef3c7; padding: 6px; border-radius: 4px; margin-bottom: 8px;">
+        ⚠️ Potential Viewpoint / PTZ Shift: Backup candidate feeds available.
+      </div>
+
+      <button id="btn-toggle-follow" class="follow-btn" style="display: none;">Follow this Location</button>
+    </div>
+
+    <div class="list-section">
+      <h3 id="list-heading">Pilot Cameras</h3>
+      <div id="camera-list">Loading cameras...</div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <script 
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    crossorigin="">
+  </script>
+  <script src="./js/app.js"></script>
+</body>
+</html>
