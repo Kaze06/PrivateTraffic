@@ -20,3 +20,15 @@ The initial scope is one to three camera sources from one provider, with permitt
 - Ziyan Yao 1230020566
 
 Individual strengths and functional ownership will be confirmed by the team before implementation.
+
+## C prototype build
+
+The C prototype uses three sibling directories: `yzy_measurement/`, `jiajun_backend/`, and `yzy_trends_alerts/`. The trend and alert module is in this branch. Its CMake file imports the other two modules, so arrange their source files in those directories before building the combined project.
+
+```powershell
+cmake -S . -B build -G "MinGW Makefiles"
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+See [`yzy_trends_alerts/README.md`](yzy_trends_alerts/README.md) for rule, dashboard, and pipeline commands. Generated `build/` files and local measurement data are excluded from version control.
