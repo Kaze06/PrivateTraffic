@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrivateTraffic · 历史趋势与告警</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topline">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>PrivateTraffic</div>
+      <div id="connection" class="connection">等待本地数据</div>
+    </header>
+
+    <section class="heading">
+      <div>
+        <h1 id="location-name">选择的地点</h1>
+        <p id="location-id" class="subtitle">等待测量记录</p>
+      </div>
+      <button id="refresh" type="button">刷新记录</button>
+    </section>
+
+    <div id="alert-banner" class="alert-banner" role="alert" hidden></div>
+
+    <section class="periods" aria-label="比较时间段">
+      <fieldset>
+        <legend><span class="series-dot current"></span>时间段 A</legend>
+        <label>从 <input id="a-from" type="datetime-local"></label>
+        <label>到 <input id="a-to" type="datetime-local"></label>
+      </fieldset>
+      <fieldset>
+        <legend><span class="series-dot previous"></span>时间段 B</legend>
+        <label>从 <input id="b-from" type="datetime-local"></label>
+        <label>到 <input id="b-to" type="datetime-local"></label>
+      </fieldset>
+    </section>
+
+    <section class="analysis" aria-labelledby="chart-title">
+      <div class="section-title">
+        <div><h2 id="chart-title">车辆流量对比</h2><p>只用有效测量绘图；横轴按各时间段的实际时间比例排列。</p></div>
+        <span class="unit">辆 / 分钟</span>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="chart-wrap"><svg id="chart" viewBox="0 0 920 230" role="img" aria-label="两个时间段的车辆流量折线图"></svg></div>
+      <p id="chart-note" class="chart-note"></p>
+    </section>
+
+    <div class="lower">
+      <section aria-labelledby="rules-title">
+        <div class="section-title"><div><h2 id="rules-title">告警规则</h2><p>阈值与生效时间由用户设置。</p></div></div>
+        <div id="rules" class="list"></div>
+      </section>
+      <section aria-labelledby="events-title">
+        <div class="section-title"><div><h2 id="events-title">最近告警</h2><p>新告警会在本页面顶部提醒。</p></div></div>
+        <div id="events" class="list"></div>
+      </section>
+    </div>
+  </main>
+  <script src="dashboard.js"></script>
+</body>
+</html>
