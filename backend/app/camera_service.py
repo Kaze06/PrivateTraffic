@@ -1,8 +1,9 @@
 import json
 import logging
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import List, Dict, Any
 from sqlalchemy.orm import Session
-from app.config import JSON_511MN_PATH, PILOT_CAMERAS_PATH
+from app.config import JSON_511MN_PATH, PILOT_CAMERAS_PATH, BASE_DIR
 from app.models import CameraSourceModel
 
 logger = logging.getLogger(__name__)
@@ -13,20 +14,28 @@ def extract_road_name(title: str) -> str:
     parts = title.split(":")
     return parts[0].strip() if len(parts) > 1 else title.strip()
 
+def load_pilot_list() -> List[Dict[str, Any]]:
+    """Dynamically loads pilot_cameras.json on every call."""
+    candidate_paths = [
+        Path(PILOT_CAMERAS_PATH),
+        BASE_DIR / "pilot_cameras.json",
+        Path.cwd() / "pilot_cameras.json",
+        Path.cwd().parent / "pilot_cameras.json"
+    ]
+    for p in candidate_paths:
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading {p}: {e}")
+    return []
+
 def load_pilot_codes() -> Dict[str, Dict[str, Any]]:
-    try:
-        with open(PILOT_CAMERAS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return {item["camera_code"]: item for item in data if "camera_code" in item}
-    except Exception as e:
-        logger.error(f"Failed to read pilot_cameras.json: {e}")
-        return {}
+    data = load_pilot_list()
+    return {item["camera_code"]: item for item in data if "camera_code" in item}
 
 def initialize_camera_database(db: Session) -> int:
-    """
-    Parses 511MN.json once on startup and populates the SQLite database.
-    Matches cameras with pilot_cameras.json to flag is_pilot.
-    """
     if db.query(CameraSourceModel).count() > 0:
         return db.query(CameraSourceModel).count()
 
@@ -55,7 +64,6 @@ def initialize_camera_database(db: Session) -> int:
             continue
         lng, lat = float(coords[0]), float(coords[1])
 
-        # Extract camera code from view URL (e.g. .../cameras/MN/C631 -> C631)
         camera_code = None
         stream_url = None
         for view in item.get("views", []):
@@ -67,9 +75,10 @@ def initialize_camera_database(db: Session) -> int:
                 break
 
         is_pilot = False
+        is_default = False
         if camera_code and camera_code in pilot_map:
             is_pilot = True
-            # Allow pilot config to override stream url if specified
+            is_default = bool(pilot_map[camera_code].get("is_default", False))
             if pilot_map[camera_code].get("stream_url"):
                 stream_url = pilot_map[camera_code]["stream_url"]
 
@@ -82,11 +91,10 @@ def initialize_camera_database(db: Session) -> int:
             longitude=lng,
             stream_url=stream_url,
             is_pilot=is_pilot,
-            current_status="unavailable"
+            current_status="initializing"
         )
         cameras_to_create.append(cam_record)
 
     db.bulk_save_objects(cameras_to_create)
     db.commit()
-    logger.info(f"Loaded {len(cameras_to_create)} camera sources into local database.")
     return len(cameras_to_create)

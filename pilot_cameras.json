@@ -3,7 +3,7 @@
     "camera_code": "C631",
     "title": "I-35W: I-35W SB @ Johnson St",
     "stream_url": "https://video.dot.state.mn.us/public/C631.stream/playlist.m3u8",
-    "is_default": false
+    "is_default": true
   },
   {
     "camera_code": "C825",
@@ -21,6 +21,6 @@
     "camera_code": "C8351",
     "title": "I-35W: I-94 WB @ Chicago Ave",
     "stream_url": "https://video.dot.state.mn.us/public/C8351.stream/playlist.m3u8",
-    "is_default": true
+    "is_default": false
   }
 ]

@@ -16,6 +16,7 @@ class CurrentStatusResponse(BaseModel):
     camera_code: Optional[str] = None
     camera_title: str
     is_pilot: bool
+    is_default: bool = False
     status: str
     vehicle_count: Optional[int] = None
     flow_per_minute: Optional[float] = None
@@ -44,6 +45,7 @@ class CameraItem(BaseModel):
     longitude: float
     stream_url: Optional[str]
     is_pilot: bool
+    is_default: bool = False
     current_status: str
 
 class HistoricalPoint(BaseModel):

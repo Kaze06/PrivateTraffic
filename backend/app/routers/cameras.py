@@ -8,6 +8,7 @@ from typing import List
 
 from app.database import get_db
 from app.config import SOURCE_ATTRIBUTION, DATA_RETENTION_POLICY, UPLOAD_DIR
+from app.camera_service import load_pilot_codes
 from app.models import CameraSourceModel, TrafficMeasurementModel
 from app.schemas import (
     CameraItem, 
@@ -20,10 +21,38 @@ router = APIRouter(prefix="/api/cameras", tags=["Cameras & Status"])
 
 @router.get("", response_model=List[CameraItem])
 def list_cameras(pilot_only: bool = False, db: Session = Depends(get_db)):
-    query = db.query(CameraSourceModel)
-    if pilot_only:
-        query = query.filter(CameraSourceModel.is_pilot == True)
-    return query.all()
+    pilot_map = load_pilot_codes()
+    cams = db.query(CameraSourceModel).all()
+    
+    results = []
+    for c in cams:
+        is_pilot = False
+        is_default = False
+        stream_url = c.stream_url
+        
+        if c.camera_code and c.camera_code in pilot_map:
+            is_pilot = True
+            is_default = bool(pilot_map[c.camera_code].get("is_default", False))
+            if not (stream_url and stream_url.startswith("/uploads")):
+                stream_url = pilot_map[c.camera_code].get("stream_url", stream_url)
+                
+        if pilot_only and not is_pilot:
+            continue
+            
+        results.append(CameraItem(
+            id=c.id,
+            camera_code=c.camera_code,
+            title=c.title,
+            road_name=c.road_name,
+            latitude=c.latitude,
+            longitude=c.longitude,
+            stream_url=stream_url,
+            is_pilot=is_pilot,
+            is_default=is_default,
+            current_status=c.current_status
+        ))
+        
+    return results
 
 @router.get("/compliance", response_model=SourceComplianceResponse)
 def get_source_compliance():
@@ -42,10 +71,6 @@ async def upload_backup_replay(
     video_file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    """
-    Allows uploading pre-recorded backup video footage to substitute for live streams
-    during maintenance or demo PTZ degradation.
-    """
     cam = db.query(CameraSourceModel).filter(CameraSourceModel.camera_code == camera_code).first()
     if not cam:
         raise HTTPException(status_code=404, detail=f"No camera found with code: {camera_code}")
@@ -73,11 +98,6 @@ async def upload_backup_replay(
 
 @router.post("/purge-replays")
 def purge_all_replays(db: Session = Depends(get_db)):
-    """
-    Deletes all uploaded video files from disk and resets camera stream URLs
-    back to native MnDOT live HLS streams.
-    """
-    # 1. Delete all uploaded MP4s in UPLOAD_DIR
     deleted_files = 0
     if os.path.exists(UPLOAD_DIR):
         for fname in os.listdir(UPLOAD_DIR):
@@ -86,10 +106,9 @@ def purge_all_replays(db: Session = Depends(get_db)):
                 if os.path.isfile(fpath) or os.path.islink(fpath):
                     os.unlink(fpath)
                     deleted_files += 1
-            except Exception as e:
+            except Exception:
                 pass
 
-    # 2. Reset cameras back to native MnDOT URLs
     cams = db.query(CameraSourceModel).all()
     reset_count = 0
     for cam in cams:
@@ -113,6 +132,10 @@ def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
     if not cam:
         raise HTTPException(status_code=404, detail="Camera location not found.")
 
+    pilot_map = load_pilot_codes()
+    is_pilot = bool(cam.camera_code and cam.camera_code in pilot_map)
+    is_default = bool(is_pilot and pilot_map[cam.camera_code].get("is_default", False))
+
     latest_meas = (
         db.query(TrafficMeasurementModel)
         .filter(TrafficMeasurementModel.camera_id == camera_id)
@@ -125,19 +148,14 @@ def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
     if latest_meas and latest_meas.timestamp:
         seconds_since = (now - latest_meas.timestamp.replace(tzinfo=timezone.utc)).total_seconds()
 
-    fallback_cams = []
-    if cam.is_pilot:
-        other_pilots = db.query(CameraSourceModel).filter(
-            CameraSourceModel.is_pilot == True,
-            CameraSourceModel.id != cam.id
-        ).all()
-        fallback_cams = [c.camera_code for c in other_pilots if c.camera_code]
+    fallback_cams = [code for code in pilot_map.keys() if code != cam.camera_code] if is_pilot else []
 
     return CurrentStatusResponse(
         camera_id=cam.id,
         camera_code=cam.camera_code,
         camera_title=cam.title,
-        is_pilot=cam.is_pilot,
+        is_pilot=is_pilot,
+        is_default=is_default,
         status=cam.current_status,
         vehicle_count=latest_meas.vehicle_count if latest_meas else None,
         flow_per_minute=latest_meas.flow_per_minute if latest_meas else None,
