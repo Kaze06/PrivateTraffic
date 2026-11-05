@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="no-referrer-when-downgrade" />
+  <title>PrivateTraffic - Location & Status Monitor</title>
+
+  <link 
+    rel="stylesheet" 
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
+  <link rel="stylesheet" href="./css/styles.css" />
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <h1>PrivateTraffic</h1>
+      <p>GPS-Free Pilot Traffic Camera Status (MnDOT)</p>
+    </div>
+
+    <div class="controls-area">
+      <input type="text" id="search-box" class="search-input" placeholder="Search roads (e.g. I-35W, MN 55)..." />
+      <div class="tab-row">
+        <button id="tab-all" class="tab-btn active">All Cameras</button>
+        <button id="tab-pilot" class="tab-btn">Pilot Cameras</button>
+        <button id="tab-followed" class="tab-btn">Followed (<span id="follow-count">0</span>)</button>
+      </div>
+    </div>
+
+    <div id="active-card">
+      <div class="card-header">
+        <div id="card-cam-title" class="card-title">Select a location</div>
+        <div class="status-badge-group">
+          <span id="badge-stream-state" class="badge badge-stream-idle">● Stream: Idle</span>
+          <span id="card-cam-badge" class="badge badge-unavailable">State: Initializing</span>
+        </div>
+      </div>
+
+      <div id="video-display-area" style="display: none;">
+        <div class="video-mode-bar">
+          <button id="btn-mode-raw" class="vmode-btn active">📹 Raw Stream (MnDOT)</button>
+          <button id="btn-mode-augmented" class="vmode-btn">⚡ YOLO Augmented</button>
+        </div>
+
+        <!-- Video Wrapper Container (Fullscreen target for both raw video & YOLO frames) -->
+        <div class="media-frame-wrapper" id="media-container">
+          <video id="raw-video-player" autoplay muted playsinline></video>
+          <img id="augmented-image-feed" alt="Augmented stream loading..." style="display: none;" />
+
+          <div id="live-indicator-overlay" class="live-pill">
+            <span class="live-dot"></span> <span id="live-indicator-text">LIVE</span>
+          </div>
+
+          <div id="cv-offline-notice" style="display: none;" class="stream-overlay-notice">
+            <span>YOLO Inference Pipeline Offline</span>
+            <small>Model is not currently submitting inference frames. Switched to raw camera view.</small>
+          </div>
+        </div>
+
+        <!-- Custom Video Controls (Play/Pause & Fullscreen only) -->
+        <div class="custom-video-controls" id="custom-video-controls">
+          <button id="btn-play-pause" class="vid-ctrl-btn">⏸ Pause</button>
+          <span class="vid-status-tag" id="vid-status-tag">● Live Stream (MnDOT)</span>
+          <button id="btn-fullscreen" class="vid-ctrl-btn">⛶ Fullscreen</button>
+        </div>
+      </div>
+
+      <div class="metrics-grid">
+        <div class="metric-box">
+          <div id="val-count" class="metric-val">--</div>
+          <div class="metric-lbl">Count</div>
+        </div>
+        <div class="metric-box">
+          <div id="val-flow" class="metric-val">--</div>
+          <div class="metric-lbl">Flow (veh/min)</div>
+        </div>
+        <div class="metric-box">
+          <div id="val-level" class="metric-val">--</div>
+          <div class="metric-lbl">Traffic Level</div>
+        </div>
+      </div>
+
+      <div class="measurement-note" id="val-updated">
+        Measurement Time: Not available
+      </div>
+
+      <div id="ptz-failover-box" style="display:none; font-size: 0.72rem; color: #b45309; background: #fef3c7; padding: 6px; border-radius: 4px; margin-bottom: 8px;">
+        ⚠️ Potential Viewpoint / PTZ Shift: Backup candidate feeds available.
+      </div>
+
+      <button id="btn-toggle-follow" class="follow-btn" style="display: none; margin-bottom: 8px;">Follow this Location</button>
+
+      <details style="margin-top: 6px; font-size: 0.75rem; background: #f1f5f9; padding: 6px 8px; border-radius: 4px; border: 1px solid #cbd5e1;">
+        <summary style="cursor: pointer; font-weight: 600; color: #334155;">📁 Manage Backup Videos & Replays</summary>
+        <form id="replay-upload-form" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
+          <div>
+            <label style="display: block; font-size: 0.68rem; color: #64748b;">Target Camera Code:</label>
+            <input type="text" id="upload-cam-code" placeholder="e.g. C8351" style="width: 100%; padding: 4px; font-size: 0.75rem; border: 1px solid #cbd5e1; border-radius: 4px;" required />
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.68rem; color: #64748b;">Select Local MP4 Clip:</label>
+            <input type="file" id="upload-video-file" accept="video/mp4,video/x-m4v,video/*" style="font-size: 0.72rem;" required />
+          </div>
+          <button type="submit" id="btn-submit-replay" style="padding: 5px 8px; font-size: 0.75rem; background: #0f172a; color: white; border: none; border-radius: 4px; cursor: pointer;">
+            Upload & Set as Replay Mode
+          </button>
+        </form>
+
+        <div style="margin-top: 10px; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
+          <button type="button" id="btn-purge-replays" style="width: 100%; padding: 5px 8px; font-size: 0.72rem; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+            🗑️ Purge All Backups & Reset to Live
+          </button>
+        </div>
+        <div id="upload-msg" style="font-size: 0.7rem; margin-top: 6px;"></div>
+      </details>
+    </div>
+
+    <div class="list-section">
+      <h3 id="list-heading">All Cameras</h3>
+      <div id="camera-list">Loading cameras...</div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <script 
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    crossorigin="">
+  </script>
+  <script src="./js/app.js?v=20261104_v4"></script>
+</body>
+</html>

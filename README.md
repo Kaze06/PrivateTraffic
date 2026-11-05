@@ -20,3 +20,31 @@ The initial scope is one to three camera sources from one provider, with permitt
 - Ziyan Yao 1230020566
 
 Individual strengths and functional ownership will be confirmed by the team before implementation.
+
+## Quickstart
+### 1. Prerequisites & Installation
+Ensure you have Python 3.10+ installed, then install the required dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Initializing the Database & Mock Data
+To seed initial mock traffic history records into SQLite (`traffic.db`) for testing and demonstrations without requiring the CV model to be running continuously:
+```bash
+python seed_mock_data.py
+```
+
+### 3. Running the Application Server
+Navigate to the backend directory and launch the FastAPI server (it serves both the REST API and the responsive browser dashboard on port 8000):
+```bash
+cd backend
+uvicorn app.main:app --reload --port 8000
+```
+Open **`http://localhost:8000`** in your phone or laptop browser.
+
+### 4. Integration Guide
+- **For (CV / YOLO Pipeline):** Run your local video detection worker. It will automatically process MnDOT streams (or local replay files) and push aggregate 1-minute vehicle counts to:
+  `POST /api/measurements`
+- **For (Charts & Alerts):** Fetch historical aggregate buckets for comparison graphs and trend analysis via:
+  `GET /api/history?camera_id=<id>&start_time=<iso>&end_time=<iso>`
+- **For (Location & Current Status):** Manages the OpenStreetMap catalog, GPS-free session persistence (`localStorage`), live HLS/MP4 media streaming, and source health monitoring (`live_fresh`, `stale`, `offline`, `replay_not_live`).
