@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 run_detector_worker.py
-Thread-safe, real-time RF-DETR detection worker with strict 1.0x wall-clock pacing,
-zero buffer bursts, and quiet operation.
+Thread-safe, real-time RF-DETR detection worker with strict wall-clock pacing,
+automatic backup replay sync, and quiet operation.
 """
 import sys
 import os
@@ -34,22 +34,19 @@ logger = logging.getLogger("RFDETR-Worker")
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 
 class PacedStreamReader:
-    """
-    Reads stream frames with strict wall-clock pacing (~30 FPS).
-    Prevents HLS chunk-dump bursts (fast-forwarding) followed by long buffer stalls.
-    """
-    def __init__(self, stream_url: str):
+    def __init__(self, stream_url: str, is_local_file: bool = False):
         self.stream_url = stream_url
+        self.is_local_file = is_local_file
         self.latest_frame = None
         self.running = True
-        self.has_fresh_frame = False
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.thread.start()
 
     def _worker_loop(self):
         cap = cv2.VideoCapture(self.stream_url)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if not self.is_local_file:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         fail_count = 0
         target_fps = 30.0
@@ -63,13 +60,18 @@ class PacedStreamReader:
                     fail_count = 0
                     with self.lock:
                         self.latest_frame = frame
-                        self.has_fresh_frame = True
 
-                    # Pace decoding to real-time playback
-                    elapsed = time.time() - t0
-                    sleep_time = max(0.001, frame_interval - elapsed)
-                    time.sleep(sleep_time)
+                    if self.is_local_file:
+                        time.sleep(0.03)  # natural playback for local MP4 files
+                    else:
+                        elapsed = time.time() - t0
+                        sleep_time = max(0.001, frame_interval - elapsed)
+                        time.sleep(sleep_time)
                 else:
+                    if self.is_local_file:
+                        # Loop local replay video files seamlessly
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
                     fail_count += 1
                     time.sleep(0.05)
             else:
@@ -78,7 +80,8 @@ class PacedStreamReader:
                     break
                 cap.release()
                 cap = cv2.VideoCapture(self.stream_url)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                if not self.is_local_file:
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 fail_count = 0
 
         cap.release()
@@ -86,9 +89,7 @@ class PacedStreamReader:
     def get_latest_frame(self):
         with self.lock:
             if self.latest_frame is not None:
-                frame = self.latest_frame.copy()
-                self.has_fresh_frame = False
-                return frame
+                return self.latest_frame.copy()
             return None
 
     def stop(self):
@@ -96,7 +97,7 @@ class PacedStreamReader:
         if self.thread.is_alive():
             self.thread.join(timeout=2.0)
 
-def get_camera_by_id(camera_id: str, session: requests.Session):
+def get_camera_status(camera_id: str, session: requests.Session):
     try:
         res = session.get(f"{API_BASE_URL}/api/cameras/{camera_id}/status", timeout=2)
         if res.status_code == 200:
@@ -136,29 +137,24 @@ def get_default_camera(session: requests.Session):
 def create_synthetic_roadway_frame(frame_idx: int) -> np.ndarray:
     h, w = 360, 640
     frame = np.full((h, w, 3), 60, dtype=np.uint8)
-
     cv2.line(frame, (0, 180), (w, 180), (255, 255, 255), 2)
     for x in range(0, w, 50):
         cv2.line(frame, (x, 120), (x + 25, 120), (255, 255, 255), 2)
         cv2.line(frame, (x, 240), (x + 25, 240), (255, 255, 255), 2)
-
-    v1_x = int((frame_idx * 4) % (w + 100)) - 80
+    v1_x = int((frame_idx * 5) % (w + 100)) - 80
     cv2.rectangle(frame, (v1_x, 135), (v1_x + 75, 170), (40, 40, 180), -1)
-
-    v2_x = int((frame_idx * 3 + 180) % (w + 120)) - 90
-    cv2.rectangle(frame, (v2_x, 195), (v2_x + 85, 235), (180, 50, 50), -1)
-
     cv2.putText(frame, "Stream Connecting / Reconnecting", (15, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
     return frame
 
-def resolve_stream_url(stream_url: str) -> str:
+def resolve_stream_url(stream_url: str):
+    is_local = False
     if str(stream_url).startswith("/uploads/"):
         local_path = BASE_DIR / stream_url.lstrip("/")
         if local_path.exists():
-            return str(local_path)
-        return f"{API_BASE_URL}{stream_url}"
-    return stream_url
+            return str(local_path), True
+        return f"{API_BASE_URL}{stream_url}", False
+    return stream_url, is_local
 
 def main():
     parser = argparse.ArgumentParser(description="PrivateTraffic Detection Worker")
@@ -171,10 +167,15 @@ def main():
 
     current_cam = get_default_camera(session)
     camera_id = current_cam["id"]
-    stream_url = resolve_stream_url(args.source or current_cam.get("stream_url"))
+    
+    # Check status for any active backup replay
+    status_info = get_camera_status(camera_id, session)
+    initial_url = status_info.get("stream_url") if status_info else current_cam.get("stream_url")
 
-    logger.info(f"Target Camera: {camera_id} ({current_cam.get('title')})")
-    reader = PacedStreamReader(stream_url)
+    stream_url, is_local = resolve_stream_url(args.source or initial_url)
+    logger.info(f"Target Camera: {camera_id} | Source: {stream_url} (Local File: {is_local})")
+
+    reader = PacedStreamReader(stream_url, is_local_file=is_local)
 
     unique_tracked_ids = set()
     window_start_time = time.time()
@@ -184,22 +185,24 @@ def main():
 
     try:
         while True:
-            # Poll for camera focus changes every 3 seconds
-            if args.source is None and (time.time() - last_focus_check_time > 3.0):
+            # Poll for active camera or backup video change every 2.5 seconds
+            if args.source is None and (time.time() - last_focus_check_time > 2.5):
                 last_focus_check_time = time.time()
                 active_id = get_active_focus_camera_id(session)
-                if active_id and active_id != camera_id:
-                    cam_info = get_camera_by_id(active_id, session)
+                if active_id:
+                    cam_info = get_camera_status(active_id, session)
                     if cam_info and cam_info.get("stream_url"):
-                        logger.info(f"[Camera Switch] Transitioning to: {active_id} ({cam_info.get('camera_title')})")
-                        camera_id = active_id
-                        stream_url = resolve_stream_url(cam_info["stream_url"])
-
-                        reader.stop()
-                        reader = PacedStreamReader(stream_url)
-
-                        unique_tracked_ids.clear()
-                        window_start_time = time.time()
+                        target_url = cam_info["stream_url"]
+                        resolved_url, local_flag = resolve_stream_url(target_url)
+                        
+                        if active_id != camera_id or resolved_url != reader.stream_url:
+                            logger.info(f"[Source Switch] Camera={active_id} | URL={resolved_url}")
+                            camera_id = active_id
+                            stream_url = resolved_url
+                            reader.stop()
+                            reader = PacedStreamReader(stream_url, is_local_file=local_flag)
+                            unique_tracked_ids.clear()
+                            window_start_time = time.time()
 
             raw_frame = reader.get_latest_frame()
             if raw_frame is None:
@@ -222,9 +225,8 @@ def main():
                     if int(tid) > 0:
                         unique_tracked_ids.add(int(tid))
 
-            # Push live augmented JPEG frame smoothly at ~15 FPS
             now_ts = time.time()
-            if now_ts - last_frame_push_time >= 0.066:
+            if now_ts - last_frame_push_time >= 0.065:
                 ret_enc, jpeg_buf = cv2.imencode(".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
                 if ret_enc:
                     try:
@@ -238,7 +240,6 @@ def main():
                     except Exception:
                         pass
 
-            # 60s measurement window completion
             elapsed = time.time() - window_start_time
             if elapsed >= WINDOW_SECONDS:
                 total_unique = len(unique_tracked_ids)

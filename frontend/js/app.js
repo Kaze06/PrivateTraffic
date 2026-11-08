@@ -169,9 +169,13 @@
         hlsPlayer.attachMedia(rawVideo);
       } else if (rawVideo.canPlayType("application/vnd.apple.mpegurl")) {
         rawVideo.src = streamUrl;
+        rawVideo.load();
+        rawVideo.play().catch(() => {});
       }
     } else if (streamUrl) {
       rawVideo.src = streamUrl;
+      rawVideo.load();
+      rawVideo.play().catch(() => {});
     }
 
     const isAugmentedActive = document.getElementById("btn-mode-augmented").classList.contains("active");
