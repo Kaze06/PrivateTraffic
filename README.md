@@ -37,13 +37,18 @@ python seed_mock_data.py
 ### 3. Running the Application Server
 Navigate to the backend directory and launch the FastAPI server (it serves both the REST API and the responsive browser dashboard on port 8000):
 ```bash
-cd backend
-uvicorn app.main:app --reload --port 8000
+# cd /mnt/d/2609/PrivateTraffic && pytest -v
+
+# Terminal 1 (Backend)
+cd /mnt/d/2609/PrivateTraffic/backend && uvicorn app.main:app --reload --port 8000
+
+# Terminal 2 (Worker)
+cd /mnt/d/2609/PrivateTraffic && python run_detector_worker.py
 ```
 Open **`http://localhost:8000`** in your phone or laptop browser.
 
 ### 4. Integration Guide
-- **For (CV / YOLO Pipeline):** Run your local video detection worker. It will automatically process MnDOT streams (or local replay files) and push aggregate 1-minute vehicle counts to:
+- **For (CV / Detection Pipeline):** Run your local video detection worker. It will automatically process MnDOT streams (or local replay files) and push aggregate 1-minute vehicle counts to:
   `POST /api/measurements`
 - **For (Charts & Alerts):** Fetch historical aggregate buckets for comparison graphs and trend analysis via:
   `GET /api/history?camera_id=<id>&start_time=<iso>&end_time=<iso>`

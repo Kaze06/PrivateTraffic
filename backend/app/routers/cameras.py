@@ -1,10 +1,11 @@
 import os
 import shutil
+import urllib.parse
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.database import get_db
 from app.config import SOURCE_ATTRIBUTION, DATA_RETENTION_POLICY, UPLOAD_DIR
@@ -18,6 +19,21 @@ from app.schemas import (
 from app.video_stream import stream_manager
 
 router = APIRouter(prefix="/api/cameras", tags=["Cameras & Status"])
+
+# Holds the active camera ID currently selected in the frontend dashboard
+ACTIVE_FOCUS_CAMERA_ID: Optional[str] = None
+
+@router.get("/active-focus")
+def get_active_focus():
+    return {"active_camera_id": ACTIVE_FOCUS_CAMERA_ID}
+
+@router.post("/active-focus")
+def set_active_focus(payload: dict):
+    global ACTIVE_FOCUS_CAMERA_ID
+    cam_id = payload.get("camera_id")
+    if cam_id:
+        ACTIVE_FOCUS_CAMERA_ID = urllib.parse.unquote(cam_id)
+    return {"status": "ok", "active_camera_id": ACTIVE_FOCUS_CAMERA_ID}
 
 @router.get("", response_model=List[CameraItem])
 def list_cameras(pilot_only: bool = False, db: Session = Depends(get_db)):
@@ -67,7 +83,7 @@ def get_source_compliance():
 
 @router.post("/upload-replay")
 async def upload_backup_replay(
-    camera_code: str = Form(..., example="C8351"),
+    camera_code: str = Form(..., examples=["C8351"]),
     video_file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
@@ -128,7 +144,8 @@ def purge_all_replays(db: Session = Depends(get_db)):
 
 @router.get("/{camera_id:path}/status", response_model=CurrentStatusResponse)
 def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
-    cam = db.query(CameraSourceModel).filter(CameraSourceModel.id == camera_id).first()
+    cam_id = urllib.parse.unquote(camera_id)
+    cam = db.query(CameraSourceModel).filter(CameraSourceModel.id == cam_id).first()
     if not cam:
         raise HTTPException(status_code=404, detail="Camera location not found.")
 
@@ -138,7 +155,7 @@ def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
 
     latest_meas = (
         db.query(TrafficMeasurementModel)
-        .filter(TrafficMeasurementModel.camera_id == camera_id)
+        .filter(TrafficMeasurementModel.camera_id == cam_id)
         .order_by(TrafficMeasurementModel.timestamp.desc())
         .first()
     )
@@ -164,13 +181,23 @@ def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
         last_valid_time=cam.last_measurement_time,
         stream_url=cam.stream_url,
         seconds_since_update=seconds_since,
-        has_augmented_stream=stream_manager.has_active_stream(cam.id),
+        has_augmented_stream=stream_manager.has_active_stream(cam_id),
         failover_candidates=fallback_cams
     )
 
+@router.post("/{camera_id:path}/frame")
+async def ingest_augmented_frame(camera_id: str, request: Request):
+    """Receives live inference JPEG frames from the detection worker."""
+    cam_id = urllib.parse.unquote(camera_id)
+    frame_bytes = await request.body()
+    stream_manager.update_frame(cam_id, frame_bytes)
+    return {"status": "ok"}
+
 @router.get("/{camera_id:path}/stream")
 async def get_augmented_video_stream(camera_id: str):
+    """Streams live augmented video to the browser as multipart MJPEG."""
+    cam_id = urllib.parse.unquote(camera_id)
     return StreamingResponse(
-        stream_manager.get_stream(camera_id),
+        stream_manager.get_stream(cam_id),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )

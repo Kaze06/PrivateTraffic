@@ -1,624 +1,426 @@
-// PrivateTraffic - Location Selection & Current Status (Owner: Member B)
-// Robust media playback handling, custom controls, container fullscreen API for video/YOLO frames
+(function () {
+  let map;
+  let markersLayer;
+  let allCameras = [];
+  let selectedCameraId = null;
+  let activeTab = "all";
+  let statusPollTimer = null;
+  let hlsPlayer = null;
 
-const API_BASE = "/api";
-let map, markerGroup;
-let allCameras = [];
-let selectedCameraId = null;
-let currentTab = "all";
-let pollingInterval = null;
-let currentHls = null;
-let videoMode = "raw";
+  const FOLLOWED_KEY = "privatetraffic_followed_cams";
 
-const BLANK_IMAGE_URI = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E";
-
-function initMap() {
-  const mapEl = document.getElementById('map');
-  if (!mapEl) return;
-
-  map = L.map('map').setView([44.9778, -93.2650], 11);
-
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-  }).addTo(map);
-
-  markerGroup = L.layerGroup().addTo(map);
-}
-
-function getFollowedLocations() {
-  return JSON.parse(localStorage.getItem("pt_followed_cameras") || "[]");
-}
-
-function isFollowed(cameraId) {
-  return getFollowedLocations().includes(cameraId);
-}
-
-function toggleFollow(cameraId) {
-  let list = getFollowedLocations();
-  if (list.includes(cameraId)) {
-    list = list.filter(id => id !== cameraId);
-  } else {
-    list.push(cameraId);
-  }
-  localStorage.setItem("pt_followed_cameras", JSON.stringify(list));
-  updateFollowCount();
-  updateFollowButtonState();
-  if (currentTab === "followed") renderList();
-}
-
-function updateFollowCount() {
-  const countEl = document.getElementById("follow-count");
-  if (countEl) countEl.textContent = getFollowedLocations().length;
-}
-
-function stopActiveStreams() {
-  if (currentHls) {
+  function getFollowedList() {
     try {
-      currentHls.stopLoad();
-      currentHls.detachMedia();
-      currentHls.destroy();
+      return JSON.parse(localStorage.getItem(FOLLOWED_KEY)) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  function setFollowedList(list) {
+    localStorage.setItem(FOLLOWED_KEY, JSON.stringify(list));
+    updateFollowCountBadge();
+  }
+
+  function isFollowed(camId) {
+    return getFollowedList().includes(camId);
+  }
+
+  function toggleFollow(camId) {
+    let list = getFollowedList();
+    if (list.includes(camId)) {
+      list = list.filter(id => id !== camId);
+    } else {
+      list.push(camId);
+    }
+    setFollowedList(list);
+    renderCameraList();
+    updateActiveCardFollowButton();
+  }
+
+  function updateFollowCountBadge() {
+    const el = document.getElementById("follow-count");
+    if (el) el.innerText = getFollowedList().length;
+  }
+
+  function initMap() {
+    map = L.map("map", { zoomControl: true }).setView([44.9778, -93.2650], 11);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    markersLayer = L.layerGroup().addTo(map);
+  }
+
+  async function loadCameras() {
+    try {
+      const res = await fetch("/api/cameras");
+      allCameras = await res.json();
+
+      renderMarkers();
+      renderCameraList();
+
+      const defCam = allCameras.find(c => c.is_default) || allCameras[0];
+      if (defCam) {
+        selectCamera(defCam.id);
+      }
     } catch (e) {
-      console.warn("HLS teardown:", e);
+      console.error("Failed to fetch cameras:", e);
+      document.getElementById("camera-list").innerHTML = "<div style='color:red;'>Failed to load camera sources.</div>";
     }
-    currentHls = null;
   }
 
-  const video = document.getElementById("raw-video-player");
-  if (video) {
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
+  function renderMarkers() {
+    markersLayer.clearLayers();
+
+    allCameras.forEach(cam => {
+      if (activeTab === "pilot" && !cam.is_pilot) return;
+      if (activeTab === "followed" && !isFollowed(cam.id)) return;
+
+      const marker = L.circleMarker([cam.latitude, cam.longitude], {
+        radius: cam.is_pilot ? 8 : 5,
+        fillColor: cam.is_pilot ? "#2563eb" : "#64748b",
+        color: "#ffffff",
+        weight: 1.5,
+        opacity: 1,
+        fillOpacity: 0.85
+      });
+
+      marker.bindTooltip(`<b>${cam.road_name}</b><br>${cam.title}`, { offset: [0, -6] });
+      marker.on("click", () => selectCamera(cam.id));
+      markersLayer.addLayer(marker);
+    });
   }
 
-  const augImg = document.getElementById("augmented-image-feed");
-  if (augImg) {
-    augImg.removeAttribute("src");
-    augImg.src = BLANK_IMAGE_URI;
-  }
-
-  const streamBadge = document.getElementById("badge-stream-state");
-  if (streamBadge) {
-    streamBadge.className = "badge badge-stream-idle";
-    streamBadge.textContent = "● Stream: Idle";
-  }
-}
-
-function getPilotCameras() {
-  const pilots = allCameras.filter(c => c.is_pilot);
-  return pilots.sort((a, b) => (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0));
-}
-
-async function loadCameras() {
-  let data = null;
-  try {
-    const res = await fetch(`${API_BASE}/cameras`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    data = await res.json();
-  } catch (err) {
-    console.error("Failed to connect to backend:", err);
+  function renderCameraList() {
     const listEl = document.getElementById("camera-list");
-    if (listEl) {
-      listEl.innerHTML = `<div style="color:red; padding:8px 0;">Backend not connected. Start FastAPI server.</div>`;
-    }
-    return;
-  }
+    const query = document.getElementById("search-box").value.toLowerCase().trim();
 
-  allCameras = data || [];
-  renderMarkers();
-  renderList();
+    const filtered = allCameras.filter(c => {
+      if (activeTab === "pilot" && !c.is_pilot) return false;
+      if (activeTab === "followed" && !isFollowed(c.id)) return false;
+      if (query && !c.title.toLowerCase().includes(query) && !c.road_name.toLowerCase().includes(query)) {
+        return false;
+      }
+      return true;
+    });
 
-  if (!selectedCameraId && allCameras.length > 0) {
-    selectCamera(allCameras[0].id);
-  }
-}
-
-function renderMarkers(filterRoad = "") {
-  if (!markerGroup) return;
-  markerGroup.clearLayers();
-  const q = filterRoad.toLowerCase().trim();
-
-  allCameras.forEach(cam => {
-    if (q && !cam.title.toLowerCase().includes(q) && !cam.road_name.toLowerCase().includes(q)) {
+    if (filtered.length === 0) {
+      listEl.innerHTML = "<div style='font-size:0.8rem; color:#94a3b8;'>No matching cameras.</div>";
       return;
     }
-    if (currentTab === "pilot" && !cam.is_pilot) return;
-    if (currentTab === "followed" && !isFollowed(cam.id)) return;
 
-    const isPilot = cam.is_pilot;
-    const isDefault = cam.is_default;
-    const marker = L.circleMarker([cam.latitude, cam.longitude], {
-      radius: isDefault ? 10 : (isPilot ? 8 : 6),
-      fillColor: isDefault ? "#f59e0b" : (isPilot ? "#eab308" : "#3b82f6"),
-      color: isPilot ? "#b45309" : "#ffffff",
-      weight: isPilot ? 3 : 1.5,
-      opacity: 1,
-      fillOpacity: 0.9
+    listEl.innerHTML = "";
+    filtered.forEach(c => {
+      const item = document.createElement("div");
+      item.className = "camera-item" + (c.id === selectedCameraId ? " selected" : "");
+      item.innerHTML = `
+        <div>
+          <div style="font-weight:600; color:#1e293b;">${c.road_name}</div>
+          <div style="font-size:0.72rem; color:#64748b;">${c.title}</div>
+        </div>
+        <span class="badge ${c.is_pilot ? 'badge-live' : 'badge-unavailable'}">${c.is_pilot ? 'Pilot' : 'Feed'}</span>
+      `;
+      item.onclick = () => selectCamera(c.id);
+      listEl.appendChild(item);
     });
+  }
 
-    const labelPrefix = isPilot ? '★ ' : '';
-    marker.bindTooltip(`${labelPrefix}${cam.title}`);
-    marker.on('click', () => selectCamera(cam.id));
-    markerGroup.addLayer(marker);
-  });
-}
+  async function selectCamera(camId) {
+    selectedCameraId = camId;
+    const cam = allCameras.find(c => c.id === camId);
+    if (!cam) return;
 
-function playMedia(streamUrl, isReplay = false) {
-  const video = document.getElementById("raw-video-player");
-  const streamBadge = document.getElementById("badge-stream-state");
-  const liveText = document.getElementById("live-indicator-text");
-  const vidTag = document.getElementById("vid-status-tag");
+    fetch("/api/cameras/active-focus", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ camera_id: camId })
+    }).catch(() => {});
 
-  if (!video || !streamUrl) {
-    if (streamBadge) {
-      streamBadge.className = "badge badge-stream-idle";
-      streamBadge.textContent = "● Stream: N/A";
+    map.panTo([cam.latitude, cam.longitude]);
+    document.getElementById("card-cam-title").innerText = cam.title;
+    updateActiveCardFollowButton();
+    renderCameraList();
+
+    setupVideoPlayer(cam);
+    pollCameraStatus();
+
+    if (statusPollTimer) clearInterval(statusPollTimer);
+    statusPollTimer = setInterval(pollCameraStatus, 5000);
+  }
+
+  function setupVideoPlayer(cam) {
+    const videoArea = document.getElementById("video-display-area");
+    const rawVideo = document.getElementById("raw-video-player");
+
+    videoArea.style.display = "block";
+
+    if (hlsPlayer) {
+      hlsPlayer.destroy();
+      hlsPlayer = null;
     }
-    return;
-  }
 
-  if (currentHls) {
-    currentHls.destroy();
-    currentHls = null;
-  }
-
-  // Ensure video is muted and plays to satisfy browser autoplay policies
-  video.muted = true;
-
-  if (streamUrl.endsWith(".mp4") || streamUrl.includes("/uploads/")) {
-    video.removeAttribute("src");
-    video.src = streamUrl;
-    video.loop = true;
-    video.play().catch(e => console.warn("MP4 Play error:", e));
-
-    if (streamBadge) {
-      streamBadge.className = "badge badge-replay";
-      streamBadge.textContent = "● Recorded Clip - Not Live";
+    const streamUrl = cam.stream_url;
+    if (streamUrl && streamUrl.endsWith(".m3u8")) {
+      if (Hls.isSupported()) {
+        hlsPlayer = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hlsPlayer.loadSource(streamUrl);
+        hlsPlayer.attachMedia(rawVideo);
+      } else if (rawVideo.canPlayType("application/vnd.apple.mpegurl")) {
+        rawVideo.src = streamUrl;
+      }
+    } else if (streamUrl) {
+      rawVideo.src = streamUrl;
     }
-    if (liveText) liveText.textContent = "REPLAY";
-    if (vidTag) vidTag.textContent = "● Recorded Clip - Not Live";
-    return;
+
+    const isAugmentedActive = document.getElementById("btn-mode-augmented").classList.contains("active");
+    setStreamViewMode(isAugmentedActive ? "augmented" : "raw");
   }
 
-  if (streamBadge) {
-    streamBadge.className = "badge badge-stream-idle";
-    streamBadge.textContent = "● Stream: Connecting...";
-  }
+  function setStreamViewMode(mode) {
+    const rawVideo = document.getElementById("raw-video-player");
+    const augImg = document.getElementById("augmented-image-feed");
+    const btnRaw = document.getElementById("btn-mode-raw");
+    const btnAug = document.getElementById("btn-mode-augmented");
+    const liveTag = document.getElementById("vid-status-tag");
+    const cvNotice = document.getElementById("cv-offline-notice");
 
-  if (Hls.isSupported()) {
-    currentHls = new Hls({
-      enableWorker: true,
-      lowLatencyMode: true,
-      liveSyncDurationCount: 3,
-      maxLiveSyncPlaybackRate: 1.5
-    });
-    currentHls.loadSource(streamUrl);
-    currentHls.attachMedia(video);
-
-    currentHls.on(Hls.Events.MANIFEST_PARSED, () => {
-      if (streamBadge) {
-        streamBadge.className = isReplay ? "badge badge-replay" : "badge badge-stream-active";
-        streamBadge.textContent = isReplay ? "● Recorded Clip - Not Live" : "● Stream: Live (MnDOT)";
-      }
-      if (liveText) liveText.textContent = isReplay ? "REPLAY" : "LIVE";
-      if (vidTag) vidTag.textContent = isReplay ? "● Recorded Clip - Not Live" : "● Live Stream (MnDOT)";
-      video.play().catch(e => console.warn("HLS Play error:", e));
-    });
-
-    currentHls.on(Hls.Events.ERROR, (event, data) => {
-      console.warn("HLS error event:", data);
-      if (streamBadge) {
-        streamBadge.className = "badge badge-stream-idle";
-        streamBadge.textContent = "● Stream: Retrying...";
-      }
-    });
-  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = streamUrl;
-    video.addEventListener('loadedmetadata', () => {
-      if (streamBadge) {
-        streamBadge.className = isReplay ? "badge badge-replay" : "badge badge-stream-active";
-        streamBadge.textContent = isReplay ? "● Recorded Clip - Not Live" : "● Stream: Live (MnDOT)";
-      }
-      if (liveText) liveText.textContent = isReplay ? "REPLAY" : "LIVE";
-      if (vidTag) vidTag.textContent = isReplay ? "● Recorded Clip - Not Live" : "● Live Stream (MnDOT)";
-      video.play().catch(e => console.warn("Native HLS Play error:", e));
-    });
-  }
-}
-
-function setVideoDisplayMode(mode, hasAugmented) {
-  videoMode = mode;
-  const rawVideo = document.getElementById("raw-video-player");
-  const augImg = document.getElementById("augmented-image-feed");
-  const offlineNotice = document.getElementById("cv-offline-notice");
-  const btnRaw = document.getElementById("btn-mode-raw");
-  const btnAug = document.getElementById("btn-mode-augmented");
-
-  if (btnRaw) btnRaw.classList.toggle("active", mode === "raw");
-  if (btnAug) btnAug.classList.toggle("active", mode === "augmented");
-
-  const cam = allCameras.find(c => c.id === selectedCameraId);
-
-  if (mode === "raw") {
-    if (augImg) {
-      augImg.removeAttribute("src");
-      augImg.src = BLANK_IMAGE_URI;
-      augImg.style.display = "none";
-    }
-    if (offlineNotice) offlineNotice.style.display = "none";
-
-    if (rawVideo) {
+    if (mode === "raw") {
+      btnRaw.classList.add("active");
+      btnAug.classList.remove("active");
       rawVideo.style.display = "block";
-      if (cam && cam.stream_url) {
-        playMedia(cam.stream_url, cam.current_status === "replay_not_live");
-      }
-    }
-  } else {
-    if (currentHls) {
-      try {
-        currentHls.stopLoad();
-        currentHls.detachMedia();
-        currentHls.destroy();
-      } catch (e) {}
-      currentHls = null;
-    }
-    if (rawVideo) {
-      rawVideo.pause();
-      rawVideo.removeAttribute("src");
-      rawVideo.load();
-      rawVideo.style.display = "none";
-    }
-
-    if (hasAugmented) {
-      if (offlineNotice) offlineNotice.style.display = "none";
-      if (augImg) {
-        augImg.style.display = "block";
-        augImg.src = `${API_BASE}/cameras/${encodeURIComponent(selectedCameraId)}/stream?t=${Date.now()}`;
-      }
+      augImg.style.display = "none";
+      augImg.src = "";
+      cvNotice.style.display = "none";
+      liveTag.innerText = "● Live Stream (MnDOT)";
     } else {
-      if (augImg) {
-        augImg.removeAttribute("src");
-        augImg.src = BLANK_IMAGE_URI;
-        augImg.style.display = "none";
-      }
-      if (offlineNotice) offlineNotice.style.display = "flex";
+      btnRaw.classList.remove("active");
+      btnAug.classList.add("active");
+      rawVideo.style.display = "none";
+      augImg.style.display = "block";
+      augImg.src = `/api/cameras/${selectedCameraId}/stream`;
+      liveTag.innerText = "⚡ RF-DETR Detection Feed";
     }
   }
-}
 
-async function fetchCurrentStatus(cameraId) {
-  try {
-    const res = await fetch(`${API_BASE}/cameras/${encodeURIComponent(cameraId)}/status`);
-    if (!res.ok) return;
-    const statusData = await res.json();
+  async function pollCameraStatus() {
+    if (!selectedCameraId) return;
 
-    const titleEl = document.getElementById("card-cam-title");
-    if (titleEl) titleEl.textContent = statusData.camera_title;
+    try {
+      const res = await fetch(`/api/cameras/${selectedCameraId}/status`);
+      if (!res.ok) return;
+      const data = await res.json();
 
-    const badge = document.getElementById("card-cam-badge");
-    if (badge) {
-      if (statusData.status === "stale") {
-        badge.className = "badge badge-stale";
-        badge.textContent = "State: Stale (>60s)";
-      } else if (statusData.status === "live_fresh" || statusData.status === "live") {
-        badge.className = "badge badge-live";
-        badge.textContent = "State: Live Fresh";
-      } else if (statusData.status === "replay_not_live" || statusData.status === "replay") {
-        badge.className = "badge badge-replay";
-        badge.textContent = "Recorded clip - not live";
-      } else if (statusData.status === "recovering") {
-        badge.className = "badge badge-stale";
-        badge.textContent = "State: Recovering";
-      } else if (statusData.status === "offline") {
-        badge.className = "badge badge-unavailable";
-        badge.textContent = "State: Offline";
-      } else {
-        badge.className = "badge badge-unavailable";
-        badge.textContent = "State: Initializing";
-      }
+      updateStatusCard(data);
+      checkActiveAlerts(data);
+    } catch (e) {
+      console.warn("Status poll error:", e);
     }
+  }
 
-    const uploadInput = document.getElementById("upload-cam-code");
-    if (uploadInput && statusData.camera_code && !uploadInput.value) {
-      uploadInput.value = statusData.camera_code;
-    }
+  function updateStatusCard(data) {
+    const badgeState = document.getElementById("card-cam-badge");
+    const badgeStream = document.getElementById("badge-stream-state");
+    const valCount = document.getElementById("val-count");
+    const valFlow = document.getElementById("val-flow");
+    const valLevel = document.getElementById("val-level");
+    const valUpdated = document.getElementById("val-updated");
 
-    const ptzBox = document.getElementById("ptz-failover-box");
-    if (ptzBox) {
-      if (statusData.status === "offline" || statusData.status === "recovering") {
-        const candidates = (statusData.failover_candidates || []).join(", ");
-        ptzBox.textContent = `⚠️ Viewpoint / PTZ Alert: Stream disrupted. Alternate pilot feeds ready: [${candidates}]`;
-        ptzBox.style.display = "block";
-      } else {
-        ptzBox.style.display = "none";
-      }
-    }
-
-    const countEl = document.getElementById("val-count");
-    const flowEl = document.getElementById("val-flow");
-    const levelEl = document.getElementById("val-level");
-    const updatedEl = document.getElementById("val-updated");
-
-    if (statusData.status === "offline" || statusData.status === "initializing" || statusData.vehicle_count === null) {
-      if (countEl) countEl.textContent = "--";
-      if (flowEl) flowEl.textContent = "--";
-      if (levelEl) {
-        levelEl.textContent = "unable_to_determine";
-        levelEl.className = "metric-val";
-      }
-      if (updatedEl) updatedEl.textContent = "No valid inference measurements recorded.";
+    badgeState.className = "badge";
+    if (data.status === "live" || data.status === "live_fresh") {
+      badgeState.classList.add("badge-live");
+      badgeState.innerText = "State: Live";
+    } else if (data.status === "stale") {
+      badgeState.classList.add("badge-stale");
+      badgeState.innerText = "State: Stale (>60s)";
+    } else if (data.status === "replay_not_live" || data.status === "replay") {
+      badgeState.classList.add("badge-replay");
+      badgeState.innerText = "Recorded clip - not live";
     } else {
-      if (countEl) countEl.textContent = statusData.vehicle_count;
-      if (flowEl) flowEl.textContent = statusData.flow_per_minute.toFixed(1);
-      if (levelEl) {
-        levelEl.textContent = statusData.traffic_level ? statusData.traffic_level.toUpperCase() : "UNABLE_TO_DETERMINE";
-        levelEl.className = `metric-val level-${statusData.traffic_level}`;
-      }
+      badgeState.classList.add("badge-unavailable");
+      badgeState.innerText = `State: ${data.status}`;
+    }
 
-      const timeStr = new Date(statusData.measurement_time).toLocaleTimeString();
-      const delay = statusData.seconds_since_update != null 
-        ? `(${Math.round(statusData.seconds_since_update)}s ago)` 
-        : "";
+    if (data.has_augmented_stream) {
+      badgeStream.className = "badge badge-stream-active";
+      badgeStream.innerText = "● RF-DETR: Online";
+      document.getElementById("cv-offline-notice").style.display = "none";
+    } else {
+      badgeStream.className = "badge badge-stream-idle";
+      badgeStream.innerText = "● RF-DETR: Standby";
+    }
 
-      if (updatedEl) {
-        if (statusData.status === "stale") {
-          updatedEl.innerHTML = `<span style="color:#b45309">⚠️ Last valid update: ${timeStr} ${delay}</span>`;
-        } else {
-          updatedEl.innerHTML = `Measured at: ${timeStr} ${delay}`;
+    if (data.status === "stale" || data.status === "offline" || data.status === "unavailable") {
+      valCount.innerText = "--";
+      valFlow.innerText = "--";
+      valLevel.innerText = "unable_to_determine";
+      valLevel.className = "metric-val";
+    } else {
+      valCount.innerText = data.vehicle_count !== null ? data.vehicle_count : "--";
+      valFlow.innerText = data.flow_per_minute !== null ? data.flow_per_minute.toFixed(1) : "--";
+      valLevel.innerText = data.traffic_level || "unable_to_determine";
+      valLevel.className = "metric-val level-" + (data.traffic_level || "");
+    }
+
+    if (data.measurement_time) {
+      const dt = new Date(data.measurement_time);
+      valUpdated.innerText = `Measurement Time: ${dt.toLocaleTimeString()} (${Math.round(data.seconds_since_update || 0)}s ago)`;
+    } else {
+      valUpdated.innerText = "Measurement Time: Waiting for window completion";
+    }
+  }
+
+  async function checkActiveAlerts(data) {
+    if (!data.camera_id) return;
+    try {
+      const res = await fetch(`/api/alerts/events?camera_id=${encodeURIComponent(data.camera_id)}`);
+      if (res.ok) {
+        const events = await res.json();
+        if (events.length > 0) {
+          const latest = events[0];
+          const eventTime = new Date(latest.trigger_time);
+          const ageSeconds = (new Date() - eventTime) / 1000;
+          if (ageSeconds < 60 && data.status.startsWith("live")) {
+            displayInPageAlert(latest.reason);
+          }
         }
       }
-    }
-
-    const augBtn = document.getElementById("btn-mode-augmented");
-    if (augBtn) {
-      augBtn.textContent = statusData.has_augmented_stream 
-        ? "⚡ YOLO Augmented (Live)" 
-        : "⚡ YOLO (Offline)";
-    }
-
-    if (videoMode === "augmented") {
-      setVideoDisplayMode("augmented", statusData.has_augmented_stream);
-    }
-  } catch (err) {
-    console.error("Status update fetch error:", err);
-  }
-}
-
-function selectCamera(cameraId) {
-  stopActiveStreams();
-
-  selectedCameraId = cameraId;
-  const cam = allCameras.find(c => c.id === cameraId);
-  if (!cam) return;
-
-  if (map) map.setView([44.9778, -93.2650], 10);
-
-  const followBtn = document.getElementById("btn-toggle-follow");
-  if (followBtn) followBtn.style.display = "block";
-
-  const displayArea = document.getElementById("video-display-area");
-  if (displayArea) displayArea.style.display = "block";
-
-  const uploadInput = document.getElementById("upload-cam-code");
-  if (uploadInput && cam.camera_code) {
-    uploadInput.value = cam.camera_code;
-  }
-
-  updateFollowButtonState();
-  setVideoDisplayMode("raw", false);
-  fetchCurrentStatus(cameraId);
-  renderList();
-
-  if (pollingInterval) clearInterval(pollingInterval);
-  pollingInterval = setInterval(() => fetchCurrentStatus(cameraId), 10000);
-}
-
-function updateFollowButtonState() {
-  const btn = document.getElementById("btn-toggle-follow");
-  if (!btn || !selectedCameraId) return;
-  if (isFollowed(selectedCameraId)) {
-    btn.textContent = "Remove from Followed";
-    btn.classList.add("followed");
-  } else {
-    btn.textContent = "Follow this Location";
-    btn.classList.remove("followed");
-  }
-}
-
-function renderList() {
-  const container = document.getElementById("camera-list");
-  const heading = document.getElementById("list-heading");
-  if (!container) return;
-
-  let filtered = allCameras;
-
-  if (currentTab === "pilot") {
-    filtered = getPilotCameras();
-    if (heading) heading.textContent = `Pilot Cameras (${filtered.length})`;
-  } else if (currentTab === "followed") {
-    const followed = getFollowedLocations();
-    filtered = allCameras.filter(c => followed.includes(c.id));
-    if (heading) heading.textContent = `Followed Locations (${filtered.length})`;
-  } else {
-    if (heading) heading.textContent = `All Cameras (${allCameras.length})`;
-  }
-
-  if (filtered.length === 0) {
-    container.innerHTML = `<div style="color:#64748b; padding:10px 0;">No cameras found.</div>`;
-    return;
-  }
-
-  container.innerHTML = filtered.map(cam => `
-    <div class="camera-item ${selectedCameraId === cam.id ? 'selected' : ''}" onclick="selectCamera('${cam.id}')">
-      <div>
-        <strong>${cam.is_pilot ? '★ ' : ''}${cam.road_name}</strong>
-        <div style="color:#64748b; font-size:0.75rem;">${cam.title}</div>
-      </div>
-      <span class="badge badge-${cam.current_status}">${cam.current_status}</span>
-    </div>
-  `).join('');
-}
-
-function switchTab(tab) {
-  currentTab = tab;
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-  const activeBtn = document.getElementById(`tab-${tab}`);
-  if (activeBtn) activeBtn.classList.add("active");
-
-  const searchBox = document.getElementById("search-box");
-  const query = searchBox ? searchBox.value : "";
-  renderMarkers(query);
-  renderList();
-
-  if (tab === "pilot") {
-    const pilots = getPilotCameras();
-    if (pilots.length > 0) {
-      selectCamera(pilots[0].id);
+    } catch (e) {
+      console.warn("Alert check failed:", e);
     }
   }
-}
 
-window.addEventListener("DOMContentLoaded", () => {
-  initMap();
-  updateFollowCount();
-  switchTab("all");
-  loadCameras();
-
-  const searchBox = document.getElementById("search-box");
-  if (searchBox) {
-    searchBox.addEventListener("input", (e) => renderMarkers(e.target.value));
+  function displayInPageAlert(msg) {
+    let alertBanner = document.getElementById("traffic-alert-banner");
+    if (!alertBanner) {
+      alertBanner = document.createElement("div");
+      alertBanner.id = "traffic-alert-banner";
+      alertBanner.style = "position:fixed; top:16px; right:16px; background:#dc2626; color:white; padding:12px 18px; border-radius:8px; font-weight:bold; box-shadow:0 4px 12px rgba(0,0,0,0.3); z-index:9999; display:flex; align-items:center; gap:8px;";
+      document.body.appendChild(alertBanner);
+    }
+    alertBanner.innerHTML = `⚠️ <span>${msg}</span>`;
+    setTimeout(() => {
+      if (alertBanner) alertBanner.remove();
+    }, 10000);
   }
 
-  const tabPilot = document.getElementById("tab-pilot");
-  if (tabPilot) tabPilot.addEventListener("click", () => switchTab("pilot"));
-
-  const tabAll = document.getElementById("tab-all");
-  if (tabAll) tabAll.addEventListener("click", () => switchTab("all"));
-
-  const tabFollowed = document.getElementById("tab-followed");
-  if (tabFollowed) tabFollowed.addEventListener("click", () => switchTab("followed"));
-
-  const followBtn = document.getElementById("btn-toggle-follow");
-  if (followBtn) {
-    followBtn.addEventListener("click", () => {
-      if (selectedCameraId) toggleFollow(selectedCameraId);
-    });
+  function updateActiveCardFollowButton() {
+    const btn = document.getElementById("btn-toggle-follow");
+    if (!selectedCameraId) {
+      btn.style.display = "none";
+      return;
+    }
+    btn.style.display = "block";
+    if (isFollowed(selectedCameraId)) {
+      btn.classList.add("followed");
+      btn.innerText = "★ Following Location (Click to Unfollow)";
+    } else {
+      btn.classList.remove("followed");
+      btn.innerText = "☆ Follow this Location";
+    }
   }
 
-  const btnRaw = document.getElementById("btn-mode-raw");
-  if (btnRaw) {
-    btnRaw.addEventListener("click", () => setVideoDisplayMode("raw", false));
-  }
+  document.addEventListener("DOMContentLoaded", () => {
+    initMap();
+    loadCameras();
+    updateFollowCountBadge();
 
-  const btnAug = document.getElementById("btn-mode-augmented");
-  if (btnAug) {
-    btnAug.addEventListener("click", () => {
-      fetchCurrentStatus(selectedCameraId).then(() => {
-        setVideoDisplayMode("augmented", false);
-      });
-    });
-  }
+    document.getElementById("btn-mode-raw").onclick = () => setStreamViewMode("raw");
+    document.getElementById("btn-mode-augmented").onclick = () => setStreamViewMode("augmented");
 
-  // Custom Live Video Controls (Play/Pause & Fullscreen for both raw video & YOLO frames)
-  const btnPlayPause = document.getElementById("btn-play-pause");
-  const btnFullscreen = document.getElementById("btn-fullscreen");
-  const rawVideo = document.getElementById("raw-video-player");
-  const mediaContainer = document.getElementById("media-container");
-
-  if (btnPlayPause && rawVideo) {
-    btnPlayPause.addEventListener("click", () => {
-      if (rawVideo.paused) {
-        rawVideo.play();
-        btnPlayPause.textContent = "⏸ Pause";
+    document.getElementById("btn-play-pause").onclick = () => {
+      const v = document.getElementById("raw-video-player");
+      if (v.paused) {
+        v.play();
+        document.getElementById("btn-play-pause").innerText = "⏸ Pause";
       } else {
-        rawVideo.pause();
-        btnPlayPause.textContent = "▶ Play";
+        v.pause();
+        document.getElementById("btn-play-pause").innerText = "▶ Play";
       }
-    });
-  }
+    };
 
-  if (btnFullscreen && mediaContainer) {
-    btnFullscreen.addEventListener("click", () => {
-      if (mediaContainer.requestFullscreen) {
-        mediaContainer.requestFullscreen();
-      } else if (mediaContainer.webkitRequestFullscreen) {
-        mediaContainer.webkitRequestFullscreen();
-      } else if (mediaContainer.msRequestFullscreen) {
-        mediaContainer.msRequestFullscreen();
+    document.getElementById("btn-fullscreen").onclick = () => {
+      const container = document.getElementById("media-container");
+      if (!document.fullscreenElement) {
+        container.requestFullscreen().catch(err => alert("Fullscreen error: " + err.message));
+      } else {
+        document.exitFullscreen();
       }
-    });
-  }
+    };
 
-  const uploadForm = document.getElementById("replay-upload-form");
-  if (uploadForm) {
-    uploadForm.addEventListener("submit", async (e) => {
+    document.getElementById("btn-toggle-follow").onclick = () => {
+      if (selectedCameraId) toggleFollow(selectedCameraId);
+    };
+
+    document.getElementById("search-box").addEventListener("input", renderCameraList);
+
+    document.getElementById("tab-all").onclick = function () {
+      activeTab = "all";
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      this.classList.add("active");
+      renderMarkers();
+      renderCameraList();
+    };
+
+    document.getElementById("tab-pilot").onclick = function () {
+      activeTab = "pilot";
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      this.classList.add("active");
+      renderMarkers();
+      renderCameraList();
+    };
+
+    document.getElementById("tab-followed").onclick = function () {
+      activeTab = "followed";
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      this.classList.add("active");
+      renderMarkers();
+      renderCameraList();
+    };
+
+    document.getElementById("replay-upload-form").onsubmit = async (e) => {
       e.preventDefault();
-      const camCode = document.getElementById("upload-cam-code").value.trim();
+      const code = document.getElementById("upload-cam-code").value.trim();
       const fileInput = document.getElementById("upload-video-file");
       const msg = document.getElementById("upload-msg");
 
-      if (!camCode || fileInput.files.length === 0) {
-        msg.innerHTML = "<span style='color:red;'>Enter camera code and select a video file.</span>";
-        return;
-      }
+      if (!fileInput.files.length) return;
 
       const formData = new FormData();
-      formData.append("camera_code", camCode);
+      formData.append("camera_code", code);
       formData.append("video_file", fileInput.files[0]);
 
-      msg.innerHTML = "<span style='color:#2563eb;'>Uploading video clip...</span>";
-
+      msg.innerText = "Uploading backup replay clip...";
       try {
-        const res = await fetch(`${API_BASE}/cameras/upload-replay`, {
-          method: "POST",
-          body: formData
-        });
-        const data = await res.json();
+        const res = await fetch("/api/cameras/upload-replay", { method: "POST", body: formData });
+        const resp = await res.json();
         if (res.ok) {
-          msg.innerHTML = `<span style='color:green;'>✔ Backup video active for ${camCode}!</span>`;
+          msg.style.color = "green";
+          msg.innerText = "Replay active: " + resp.message;
           await loadCameras();
-          const targetCam = allCameras.find(c => c.camera_code === camCode);
-          if (targetCam) {
-            targetCam.stream_url = data.stream_url;
-            targetCam.current_status = "replay_not_live";
-            selectCamera(targetCam.id);
-          }
+          if (resp.camera_id) selectCamera(resp.camera_id);
         } else {
-          msg.innerHTML = `<span style='color:red;'>Error: ${data.detail || "Upload failed"}</span>`;
+          msg.style.color = "red";
+          msg.innerText = resp.detail || "Upload failed.";
         }
       } catch (err) {
-        msg.innerHTML = `<span style='color:red;'>Network error uploading file.</span>`;
+        msg.style.color = "red";
+        msg.innerText = "Error: " + err.message;
       }
-    });
-  }
+    };
 
-  const btnPurge = document.getElementById("btn-purge-replays");
-  if (btnPurge) {
-    btnPurge.addEventListener("click", async () => {
-      if (!confirm("Are you sure you want to delete all uploaded test videos and restore native live feeds?")) {
-        return;
-      }
-      const msg = document.getElementById("upload-msg");
-      msg.innerHTML = "<span style='color:#2563eb;'>Purging backup videos...</span>";
+    document.getElementById("btn-purge-replays").onclick = async () => {
+      if (!confirm("Reset all cameras back to live streaming and clear uploaded videos?")) return;
       try {
-        const res = await fetch(`${API_BASE}/cameras/purge-replays`, { method: "POST" });
-        const data = await res.json();
-        if (res.ok) {
-          msg.innerHTML = `<span style='color:green;'>✔ ${data.message}</span>`;
-          await loadCameras();
-          if (selectedCameraId) {
-            selectCamera(selectedCameraId);
-          }
-        } else {
-          msg.innerHTML = `<span style='color:red;'>Purge failed.</span>`;
-        }
-      } catch (err) {
-        msg.innerHTML = `<span style='color:red;'>Error calling purge endpoint.</span>`;
+        const res = await fetch("/api/cameras/purge-replays", { method: "POST" });
+        const resp = await res.json();
+        alert(resp.message);
+        await loadCameras();
+        if (selectedCameraId) selectCamera(selectedCameraId);
+      } catch (e) {
+        alert("Purge error: " + e.message);
       }
-    });
-  }
-});
-
-window.addEventListener("beforeunload", () => {
-  stopActiveStreams();
-});
+    };
+  });
+})();

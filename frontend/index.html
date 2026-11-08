@@ -44,10 +44,10 @@
       <div id="video-display-area" style="display: none;">
         <div class="video-mode-bar">
           <button id="btn-mode-raw" class="vmode-btn active">📹 Raw Stream (MnDOT)</button>
-          <button id="btn-mode-augmented" class="vmode-btn">⚡ YOLO Augmented</button>
+          <button id="btn-mode-augmented" class="vmode-btn">⚡ Augmented</button>
         </div>
 
-        <!-- Video Wrapper Container (Fullscreen target for both raw video & YOLO frames) -->
+        <!-- Video Wrapper Container (Fullscreen target for both raw video & frames) -->
         <div class="media-frame-wrapper" id="media-container">
           <video id="raw-video-player" autoplay muted playsinline></video>
           <img id="augmented-image-feed" alt="Augmented stream loading..." style="display: none;" />
@@ -57,7 +57,7 @@
           </div>
 
           <div id="cv-offline-notice" style="display: none;" class="stream-overlay-notice">
-            <span>YOLO Inference Pipeline Offline</span>
+            <span>Inference Pipeline Offline</span>
             <small>Model is not currently submitting inference frames. Switched to raw camera view.</small>
           </div>
         </div>

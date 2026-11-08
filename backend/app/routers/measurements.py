@@ -1,29 +1,25 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import Optional, List
+from typing import Optional
 
 from app.database import get_db
 from app.models import TrafficMeasurementModel, CameraSourceModel
 from app.schemas import MeasurementCreate, HistoryResponse, HistoricalPoint
-from app.config import FLOW_BAND_CLEAR_MAX, FLOW_BAND_NORMAL_MAX
+from app.config import DEFAULT_T1, DEFAULT_T2
+from app.routers.alerts import evaluate_threshold_crossing
 
 router = APIRouter(prefix="/api", tags=["Measurements & History"])
 
 def derive_traffic_level(flow: float) -> str:
-    """Domain rule DOM-1.2: derive level from documented count bands."""
-    if flow <= FLOW_BAND_CLEAR_MAX:
+    if flow < DEFAULT_T1:
         return "clear"
-    elif flow <= FLOW_BAND_NORMAL_MAX:
+    elif flow < DEFAULT_T2:
         return "normal"
     return "congested"
 
 @router.post("/measurements", status_code=status.HTTP_201_CREATED)
 def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)):
-    """
-    Data contract endpoint (CV Model Pipeline):
-    Ingests minute-by-minute vehicle counts without saving raw video (SEC-1.2).
-    """
     cam = db.query(CameraSourceModel).filter(CameraSourceModel.id == payload.camera_id).first()
     if not cam:
         raise HTTPException(status_code=404, detail="Unknown camera source ID")
@@ -31,8 +27,7 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
     ts = payload.timestamp or datetime.now(timezone.utc)
     traffic_level = payload.traffic_level or derive_traffic_level(payload.flow_per_minute)
 
-    # REQ-1.3 & AVA-1.2: Visibly separate replay data from live data
-    source_status = "replay" if payload.is_replay else payload.source_status
+    source_status = "replay_not_live" if payload.is_replay else payload.source_status
 
     measurement = TrafficMeasurementModel(
         camera_id=payload.camera_id,
@@ -45,12 +40,21 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
     )
     db.add(measurement)
 
-    # Update camera live health
     cam.current_status = source_status
     cam.last_measurement_time = ts
     db.commit()
 
-    return {"status": "success", "id": measurement.id, "traffic_level": traffic_level}
+    # Fixed threshold alert evaluation
+    alert_event = evaluate_threshold_crossing(
+        db, payload.camera_id, payload.flow_per_minute, source_status, payload.is_replay
+    )
+
+    return {
+        "status": "success",
+        "id": measurement.id,
+        "traffic_level": traffic_level,
+        "alert_triggered": bool(alert_event)
+    }
 
 @router.get("/history", response_model=HistoryResponse)
 def get_history(
@@ -59,10 +63,6 @@ def get_history(
     end_time: Optional[datetime] = None,
     db: Session = Depends(get_db)
 ):
-    """
-    Historical data query endpoint for (Charts & Trend comparison - REQ-1.4).
-    Distinguishes empty periods as 'no data' rather than zero traffic (REQ-1.4 Acceptance).
-    """
     query = db.query(TrafficMeasurementModel).filter(TrafficMeasurementModel.camera_id == camera_id)
     if start_time:
         query = query.filter(TrafficMeasurementModel.timestamp >= start_time)

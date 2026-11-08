@@ -8,14 +8,19 @@ PILOT_CAMERAS_PATH = os.getenv("PILOT_CAMERAS_PATH", str(BASE_DIR / "pilot_camer
 DATABASE_PATH = os.getenv("DATABASE_PATH", str(BASE_DIR / "traffic.db"))
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_DIR / "uploads"))
 
-# Ensure uploads directory exists
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+WINDOW_SECONDS = 60
 STALE_THRESHOLD_SECONDS = 60
 OFFLINE_THRESHOLD_SECONDS = 180
 
-FLOW_BAND_CLEAR_MAX = 15
-FLOW_BAND_NORMAL_MAX = 35
+# Traffic level classification thresholds (veh/min)
+# 0 <= flow < T1: clear, T1 <= flow < T2: normal, flow >= T2: congested
+DEFAULT_T1 = 15.0
+DEFAULT_T2 = 35.0
+
+FLOW_BAND_CLEAR_MAX = DEFAULT_T1
+FLOW_BAND_NORMAL_MAX = DEFAULT_T2
 
 SOURCE_ATTRIBUTION = "Minnesota Department of Transportation (MnDOT) MN511 Traveler Information"
-DATA_RETENTION_POLICY = "Aggregate measurements only (count, flow_vpm, timestamp); continuous raw video storage prohibited."
+DATA_RETENTION_POLICY = "Aggregate measurements only (count, flow_vpm, timestamp); raw video/frames and identity data are never stored."

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +11,19 @@ from app.config import UPLOAD_DIR
 from app.database import Base, engine, SessionLocal
 from app.camera_service import initialize_camera_database
 from app.health_monitor import start_staleness_monitor
-from app.routers import cameras, measurements
+from app.routers import cameras, measurements, alerts
+
+# Suppress repetitive high-frequency polling telemetry from the Uvicorn terminal console
+class QuietPollingFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        # Drop high-frequency background traffic
+        for noisy_endpoint in ["/frame", "/status", "/active-focus", "/alerts/events"]:
+            if noisy_endpoint in msg:
+                return False
+        return True
+
+logging.getLogger("uvicorn.access").addFilter(QuietPollingFilter())
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,9 +35,8 @@ async def lifespan(app: FastAPI):
     yield
     monitor_task.cancel()
 
-app = FastAPI(title="PrivateTraffic Core API", version="0.9", lifespan=lifespan)
+app = FastAPI(title="PrivateTraffic Core API", version="1.0", lifespan=lifespan)
 
-# Disable browser caching of HTML/JS so changes take effect immediately
 @app.middleware("http")
 async def add_no_cache_headers(request: Request, call_next):
     response = await call_next(request)
@@ -43,6 +55,7 @@ app.add_middleware(
 
 app.include_router(cameras.router)
 app.include_router(measurements.router)
+app.include_router(alerts.router)
 
 if os.path.exists(UPLOAD_DIR):
     app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")

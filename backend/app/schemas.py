@@ -3,12 +3,12 @@ from typing import Optional, List
 from pydantic import BaseModel, Field
 
 class MeasurementCreate(BaseModel):
-    camera_id: str = Field(..., example="camera/507320")
+    camera_id: str = Field(..., json_schema_extra={"example": "camera/507320"})
     timestamp: Optional[datetime] = None
     vehicle_count: int = Field(..., ge=0)
     flow_per_minute: float = Field(..., ge=0.0)
-    traffic_level: Optional[str] = Field(None, example="normal")
-    source_status: str = Field(default="live_fresh", example="live_fresh")
+    traffic_level: Optional[str] = Field(None, json_schema_extra={"example": "normal"})
+    source_status: str = Field(default="live", json_schema_extra={"example": "live"})
     is_replay: bool = Field(default=False)
 
 class CurrentStatusResponse(BaseModel):
@@ -60,3 +60,21 @@ class HistoryResponse(BaseModel):
     has_data: bool
     records: List[HistoricalPoint]
     message: Optional[str] = None
+
+class AlertRuleCreate(BaseModel):
+    camera_id: str
+    threshold_vpm: float = Field(..., gt=0.0)
+
+class AlertRuleResponse(BaseModel):
+    id: int
+    camera_id: str
+    threshold_vpm: float
+    enabled: bool
+
+class AlertEventResponse(BaseModel):
+    id: int
+    camera_id: str
+    trigger_time: datetime
+    flow_at_trigger: float
+    threshold_vpm: float
+    reason: str

@@ -27,7 +27,12 @@ Thumbs.db
 *.m3u8
 *.ts
 *.avi
+uploads/*
+!uploads/.gitkeep
 
 # IDE files
 .vscode/
 .idea/
+
+# pytest files
+.pytest_cache/
