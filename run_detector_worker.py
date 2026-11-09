@@ -16,10 +16,16 @@ import logging
 from pathlib import Path
 from datetime import datetime, timezone
 
-# Optimize FFmpeg demuxer for continuous HLS segment streaming
+os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-    "reconnect;1|reconnect_streamed;1|reconnect_delay_max;2|"
-    "rw_timeout;6000000|http_persistent;1|"
+    "reconnect;1|"
+    "reconnect_at_eof;1|"
+    "reconnect_streamed;1|"
+    "reconnect_delay_max;1|"
+    "rw_timeout;1000000|"
+    "stimeout;1000000|"
+    "http_persistent;1|"
     "user_agent;Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 )
 
@@ -83,7 +89,12 @@ class MonotonicPacedReader:
         fail_count = 0
         while self.running:
             if cap.isOpened() and fail_count < 10:
-                ret, frame = cap.read()
+                try:
+                    ret, frame = cap.read()
+                except Exception as e:
+                    logger.warning(f"FFmpeg read error encountered: {e}")
+                    ret, frame = False, None
+
                 if ret and frame is not None:
                     fail_count = 0
                     h, w = frame.shape[:2]
@@ -208,7 +219,7 @@ def main():
     for _ in range(60):
         if reader.frame_queue.qsize() >= 25 or is_local:
             break
-        time.sleep(0.05)
+        time.sleep(0.01)
 
     # Master monotonic clock for absolute 1.0x pacing
     next_frame_time = time.monotonic()
