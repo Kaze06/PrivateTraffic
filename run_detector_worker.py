@@ -240,6 +240,7 @@ def main():
                         stream_url, is_local = resolve_stream_url(cam_info["stream_url"])
                         reader.stop()
                         reader = MonotonicPacedReader(stream_url, is_local_file=is_local)
+                        detector.reset()
                         unique_tracked_ids.clear()
                         window_start_time = time.time()
                         next_frame_time = time.monotonic()

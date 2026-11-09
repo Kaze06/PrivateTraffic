@@ -22,19 +22,31 @@ COCO_VEHICLE_CLASS_IDS = {2, 3, 5, 7}  # car, motorcycle, bus, truck
 
 class DirectVehicleTracker:
     """
-    Tight frame-to-frame vehicle tracker.
-    Strictly eliminates ghost boxes: only vehicles actively detected in the CURRENT frame
-    are emitted and drawn.
+    Upgraded frame-to-frame vehicle tracker with a short lookback buffer 
+    to absorb frame flickers without generating duplicate track IDs.
     """
-    def __init__(self, iou_threshold: float = 0.20, max_dist: float = 75.0):
+    def __init__(self, iou_threshold: float = 0.20, max_dist: float = 75.0, max_age: int = 15):
         self.iou_threshold = iou_threshold
         self.max_dist = max_dist
+        self.max_age = max_age  # Frames to remember a lost car (15 frames = ~0.5s)
         self.next_id = 1
-        self.prev_tracks = {}  # {track_id: {"box": [x1, y1, x2, y2], "centroid": (cx, cy)}}
+        
+        # Structure: {track_id: {"box": [...], "centroid": (...), "age": 0, "lost_count": 0}}
+        self.tracks = {}  
+
+    def reset(self):
+        """Clears all tracking memory. Call this during a camera switch!"""
+        self.tracks.clear()
+        self.next_id = 1
 
     def update_with_detections(self, detections: sv.Detections) -> sv.Detections:
+        # Increment the lost frame counter for all existing tracks
+        for tid in self.tracks:
+            self.tracks[tid]["lost_count"] += 1
+
         if len(detections) == 0:
-            self.prev_tracks.clear()
+            # Drop tracks that have exceeded max_age even when current frame is empty
+            self.tracks = {tid: tr for tid, tr in self.tracks.items() if tr["lost_count"] <= self.max_age}
             detections.tracker_id = np.array([], dtype=int)
             return detections
 
@@ -47,12 +59,12 @@ class DirectVehicleTracker:
         assigned_ids = [-1] * len(boxes)
         matched_prev = set()
 
-        if self.prev_tracks:
-            prev_ids = list(self.prev_tracks.keys())
-            prev_boxes = np.array([self.prev_tracks[tid]["box"] for tid in prev_ids], dtype=np.float32)
-            prev_centroids = np.array([self.prev_tracks[tid]["centroid"] for tid in prev_ids], dtype=np.float32)
+        if self.tracks:
+            prev_ids = list(self.tracks.keys())
+            prev_boxes = np.array([self.tracks[tid]["box"] for tid in prev_ids], dtype=np.float32)
+            prev_centroids = np.array([self.tracks[tid]["centroid"] for tid in prev_ids], dtype=np.float32)
 
-            # Match 1: IoU
+            # Match Phase 1: Intersection Over Union (IoU)
             ious = self._compute_iou_batch(boxes, prev_boxes)
             for _ in range(min(len(boxes), len(prev_ids))):
                 max_idx = np.unravel_index(np.argmax(ious), ious.shape)
@@ -66,7 +78,7 @@ class DirectVehicleTracker:
                 ious[d_idx, :] = -1
                 ious[:, p_idx] = -1
 
-            # Match 2: Centroid Proximity
+            # Match Phase 2: Centroid Proximity (for fast cars shifting between frames)
             for d_idx in range(len(boxes)):
                 if assigned_ids[d_idx] != -1:
                     continue
@@ -85,12 +97,10 @@ class DirectVehicleTracker:
                     assigned_ids[d_idx] = best_tid
                     matched_prev.add(best_tid)
 
-        # Assign new IDs for genuinely new vehicles
-        new_tracks = {}
+        # Update matched tracks and initialize new ones
         for i in range(len(boxes)):
             box_w = boxes[i][2] - boxes[i][0]
             box_h = boxes[i][3] - boxes[i][1]
-            # Ignore tiny noise artifacts (< 500 px area)
             if box_w * box_h < 500:
                 assigned_ids[i] = -1
                 continue
@@ -102,13 +112,16 @@ class DirectVehicleTracker:
             else:
                 tid = assigned_ids[i]
 
-            new_tracks[tid] = {
+            # Lock updated measurements and reset its lost frame counter back to 0
+            self.tracks[tid] = {
                 "box": boxes[i],
-                "centroid": centroids[i]
+                "centroid": centroids[i],
+                "lost_count": 0  
             }
 
-        # Update previous tracks: NO GHOST TRACKS KEPT
-        self.prev_tracks = new_tracks
+        # Evict stale tracks that have been missing for too long
+        self.tracks = {tid: tr for tid, tr in self.tracks.items() if tr["lost_count"] <= self.max_age}
+        
         detections.tracker_id = np.array(assigned_ids, dtype=int)
         return detections
 
@@ -228,3 +241,7 @@ class VehicleDetector:
         confidence = np.full(len(boxes), 0.70, dtype=np.float32)
         class_id = np.full(len(boxes), 2, dtype=int)
         return sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
+
+    def reset(self):
+        """Resets the tracking index and memory cache."""
+        self.tracker.reset()
