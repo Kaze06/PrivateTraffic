@@ -1,8 +1,12 @@
 import os
+import time
+import json
+import asyncio
 import shutil
 import urllib.parse
+from pathlib import Path
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -20,8 +24,12 @@ from app.video_stream import stream_manager
 
 router = APIRouter(prefix="/api/cameras", tags=["Cameras & Status"])
 
-# Holds the active camera ID currently selected in the frontend dashboard
 ACTIVE_FOCUS_CAMERA_ID: Optional[str] = None
+SHM_DIR = Path("/dev/shm") if Path("/dev/shm").is_dir() else Path(os.environ.get("TEMP", "/tmp"))
+
+def get_shm_frame_path(camera_id: str) -> Path:
+    safe_name = camera_id.replace("/", "_").replace(":", "_")
+    return SHM_DIR / f"pt_frame_{safe_name}.jpg"
 
 @router.get("/active-focus")
 def get_active_focus():
@@ -34,6 +42,33 @@ def set_active_focus(payload: dict):
     if cam_id:
         ACTIVE_FOCUS_CAMERA_ID = urllib.parse.unquote(cam_id)
     return {"status": "ok", "active_camera_id": ACTIVE_FOCUS_CAMERA_ID}
+
+@router.websocket("/{camera_id:path}/ws")
+async def websocket_video_stream(websocket: WebSocket, camera_id: str):
+    """
+    Direct binary WebSocket frame delivery.
+    Sends raw JPEGs directly to the client's canvas buffer at native 30 FPS.
+    """
+    await websocket.accept()
+    cam_id = urllib.parse.unquote(camera_id)
+    frame_path = get_shm_frame_path(cam_id)
+    last_mtime = 0.0
+
+    try:
+        while True:
+            if frame_path.exists():
+                try:
+                    mtime = frame_path.stat().st_mtime
+                    if mtime > last_mtime:
+                        last_mtime = mtime
+                        with open(frame_path, "rb") as f:
+                            data = f.read()
+                        await websocket.send_bytes(data)
+                except Exception:
+                    pass
+            await asyncio.sleep(0.015)  # Fast poll to transmit frame immediately upon write
+    except (WebSocketDisconnect, asyncio.CancelledError):
+        pass
 
 @router.get("", response_model=List[CameraItem])
 def list_cameras(pilot_only: bool = False, db: Session = Depends(get_db)):
@@ -167,6 +202,9 @@ def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
 
     fallback_cams = [code for code in pilot_map.keys() if code != cam.camera_code] if is_pilot else []
 
+    frame_path = get_shm_frame_path(cam_id)
+    has_active = frame_path.exists() and (time.time() - frame_path.stat().st_mtime) < 4.0
+
     return CurrentStatusResponse(
         camera_id=cam.id,
         camera_code=cam.camera_code,
@@ -181,21 +219,12 @@ def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
         last_valid_time=cam.last_measurement_time,
         stream_url=cam.stream_url,
         seconds_since_update=seconds_since,
-        has_augmented_stream=stream_manager.has_active_stream(cam_id),
+        has_augmented_stream=has_active,
         failover_candidates=fallback_cams
     )
 
-@router.post("/{camera_id:path}/frame")
-async def ingest_augmented_frame(camera_id: str, request: Request):
-    """Receives live inference JPEG frames from the detection worker."""
-    cam_id = urllib.parse.unquote(camera_id)
-    frame_bytes = await request.body()
-    stream_manager.update_frame(cam_id, frame_bytes)
-    return {"status": "ok"}
-
 @router.get("/{camera_id:path}/stream")
 async def get_augmented_video_stream(camera_id: str):
-    """Streams live augmented video to the browser as multipart MJPEG."""
     cam_id = urllib.parse.unquote(camera_id)
     return StreamingResponse(
         stream_manager.get_stream(cam_id),

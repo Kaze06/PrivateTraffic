@@ -6,6 +6,7 @@
   let activeTab = "all";
   let statusPollTimer = null;
   let hlsPlayer = null;
+  let wsStream = null;
 
   const FOLLOWED_KEY = "privatetraffic_followed_cams";
 
@@ -144,10 +145,11 @@
     renderCameraList();
 
     setupVideoPlayer(cam);
+    setupWebSocketStream(camId);
     pollCameraStatus();
 
     if (statusPollTimer) clearInterval(statusPollTimer);
-    statusPollTimer = setInterval(pollCameraStatus, 5000);
+    statusPollTimer = setInterval(pollCameraStatus, 4000);
   }
 
   function setupVideoPlayer(cam) {
@@ -182,29 +184,52 @@
     setStreamViewMode(isAugmentedActive ? "augmented" : "raw");
   }
 
+  function setupWebSocketStream(camId) {
+    if (wsStream) {
+      wsStream.close();
+      wsStream = null;
+    }
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/api/cameras/${encodeURIComponent(camId)}/ws`;
+
+    wsStream = new WebSocket(wsUrl);
+    wsStream.binaryType = "blob";
+
+    const canvas = document.getElementById("detection-overlay-canvas");
+    const ctx = canvas.getContext("2d");
+
+    wsStream.onmessage = async function (event) {
+      if (!document.getElementById("btn-mode-augmented").classList.contains("active")) {
+        return;
+      }
+      try {
+        const imageBitmap = await createImageBitmap(event.data);
+        ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
+        imageBitmap.close();
+      } catch (err) {}
+    };
+  }
+
   function setStreamViewMode(mode) {
     const rawVideo = document.getElementById("raw-video-player");
-    const augImg = document.getElementById("augmented-image-feed");
     const btnRaw = document.getElementById("btn-mode-raw");
     const btnAug = document.getElementById("btn-mode-augmented");
     const liveTag = document.getElementById("vid-status-tag");
-    const cvNotice = document.getElementById("cv-offline-notice");
+    const canvas = document.getElementById("detection-overlay-canvas");
 
     if (mode === "raw") {
       btnRaw.classList.add("active");
       btnAug.classList.remove("active");
-      rawVideo.style.display = "block";
-      augImg.style.display = "none";
-      augImg.src = "";
-      cvNotice.style.display = "none";
+      canvas.style.display = "none";
+      rawVideo.style.visibility = "visible";
       liveTag.innerText = "● Live Stream (MnDOT)";
     } else {
       btnRaw.classList.remove("active");
       btnAug.classList.add("active");
-      rawVideo.style.display = "none";
-      augImg.style.display = "block";
-      augImg.src = `/api/cameras/${selectedCameraId}/stream`;
-      liveTag.innerText = "⚡ RF-DETR Detection Feed";
+      canvas.style.display = "block";
+      rawVideo.style.visibility = "hidden";  // Canvas renders the annotated video stream
+      liveTag.innerText = "⚡ RF-DETR Detection Stream";
     }
   }
 
@@ -249,7 +274,6 @@
     if (data.has_augmented_stream) {
       badgeStream.className = "badge badge-stream-active";
       badgeStream.innerText = "● RF-DETR: Online";
-      document.getElementById("cv-offline-notice").style.display = "none";
     } else {
       badgeStream.className = "badge badge-stream-idle";
       badgeStream.innerText = "● RF-DETR: Standby";
@@ -332,17 +356,6 @@
 
     document.getElementById("btn-mode-raw").onclick = () => setStreamViewMode("raw");
     document.getElementById("btn-mode-augmented").onclick = () => setStreamViewMode("augmented");
-
-    document.getElementById("btn-play-pause").onclick = () => {
-      const v = document.getElementById("raw-video-player");
-      if (v.paused) {
-        v.play();
-        document.getElementById("btn-play-pause").innerText = "⏸ Pause";
-      } else {
-        v.pause();
-        document.getElementById("btn-play-pause").innerText = "▶ Play";
-      }
-    };
 
     document.getElementById("btn-fullscreen").onclick = () => {
       const container = document.getElementById("media-container");

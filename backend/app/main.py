@@ -13,12 +13,10 @@ from app.camera_service import initialize_camera_database
 from app.health_monitor import start_staleness_monitor
 from app.routers import cameras, measurements, alerts
 
-# Suppress repetitive high-frequency polling telemetry from the Uvicorn terminal console
 class QuietPollingFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
-        # Drop high-frequency background traffic
-        for noisy_endpoint in ["/frame", "/status", "/active-focus", "/alerts/events"]:
+        for noisy_endpoint in ["/frame", "/status", "/active-focus", "/alerts/events", "/detections"]:
             if noisy_endpoint in msg:
                 return False
         return True

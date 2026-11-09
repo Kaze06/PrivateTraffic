@@ -163,11 +163,11 @@ body {
   border-color: #1e293b;
 }
 
-/* 16:9 Viewport Container (Target for Fullscreen API) */
+/* Native 720x480 (3:2) Viewport Container */
 .media-frame-wrapper {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 720 / 480;
   height: auto;
   background: #000000;
   border-radius: 6px 6px 0 0;
@@ -179,7 +179,6 @@ body {
   border-bottom: none;
 }
 
-/* Ensure fullscreen mode scales content properly */
 .media-frame-wrapper:-webkit-full-screen {
   width: 100vw;
   height: 100vh;
@@ -191,8 +190,7 @@ body {
   background: #000;
 }
 
-.media-frame-wrapper video,
-.media-frame-wrapper img {
+.media-frame-wrapper video {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -200,7 +198,18 @@ body {
   background: #000000;
 }
 
-/* Custom Live Video Bar (No scrubber, includes Fullscreen) */
+/* Transparent Canvas Overlay Layer */
+#detection-overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Custom Live Video Bar */
 .custom-video-controls {
   display: flex;
   align-items: center;

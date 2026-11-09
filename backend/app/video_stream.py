@@ -1,50 +1,59 @@
 import asyncio
 import time
-import cv2
-import numpy as np
+import os
+from pathlib import Path
 from typing import Dict, Optional
 
-def generate_placeholder_frame(text: str = "Connecting to RF-DETR feed...") -> bytes:
-    """Generates an immediate visual status frame so browser connections never hang."""
-    img = np.zeros((360, 640, 3), dtype=np.uint8)
-    img[:] = (30, 41, 59)  # Slate dark #1e293b
-    cv2.putText(img, "PrivateTraffic - Inference Stream", (30, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-    cv2.putText(img, text, (30, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (56, 189, 248), 1)
-    cv2.putText(img, "Awaiting camera frames from detector worker...", (30, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (148, 163, 184), 1)
-    ret, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
-    return buf.tobytes() if ret else b""
+SHM_DIR = Path("/dev/shm") if Path("/dev/shm").is_dir() else Path(os.environ.get("TEMP", "/tmp"))
 
 class VideoStreamManager:
     """
-    Thread-safe buffer holding the latest JPEG frames augmented by the detector model.
+    Reads the latest frame from zero-latency shared memory and streams it
+    at a smooth, stable 30 FPS to the browser.
     """
     def __init__(self):
-        self._frames: Dict[str, bytes] = {}
-        self._last_frame_time: Dict[str, float] = {}
+        self._last_frame_bytes: Dict[str, bytes] = {}
 
-    def update_frame(self, camera_id: str, jpeg_bytes: bytes):
-        self._frames[camera_id] = jpeg_bytes
-        self._last_frame_time[camera_id] = time.time()
+    def _get_shm_path(self, camera_id: str) -> Path:
+        safe_name = camera_id.replace("/", "_").replace(":", "_")
+        return SHM_DIR / f"pt_frame_{safe_name}.jpg"
 
-    def has_active_stream(self, camera_id: str, timeout_seconds: float = 3.5) -> bool:
-        last_time = self._last_frame_time.get(camera_id, 0)
-        return (time.time() - last_time) < timeout_seconds
+    def has_active_stream(self, camera_id: str, timeout_seconds: float = 4.0) -> bool:
+        shm_file = self._get_shm_path(camera_id)
+        if shm_file.exists():
+            try:
+                mtime = shm_file.stat().st_mtime
+                return (time.time() - mtime) < timeout_seconds
+            except OSError:
+                return False
+        return False
 
     async def get_stream(self, camera_id: str):
-        placeholder = generate_placeholder_frame("Waiting for detector frames...")
-        while True:
-            if self.has_active_stream(camera_id):
-                frame = self._frames.get(camera_id)
-            else:
-                frame = placeholder
+        shm_file = self._get_shm_path(camera_id)
+        target_interval = 1.0 / 30.0  # 30 FPS (~33.3ms)
+        last_bytes = None
 
-            if frame:
+        while True:
+            t0 = time.time()
+
+            # Read latest frame from shared memory (takes ~0.05ms)
+            if shm_file.exists():
+                try:
+                    with open(shm_file, "rb") as f:
+                        last_bytes = f.read()
+                except (OSError, IOError):
+                    pass
+
+            if last_bytes:
                 yield (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n"
-                    b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n" +
-                    frame + b"\r\n"
+                    b"Content-Length: " + str(len(last_bytes)).encode() + b"\r\n\r\n" +
+                    last_bytes + b"\r\n"
                 )
-            await asyncio.sleep(0.04)  # ~25 FPS
+
+            elapsed = time.time() - t0
+            sleep_time = max(0.005, target_interval - elapsed)
+            await asyncio.sleep(sleep_time)
 
 stream_manager = VideoStreamManager()

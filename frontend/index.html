@@ -36,7 +36,7 @@
       <div class="card-header">
         <div id="card-cam-title" class="card-title">Select a location</div>
         <div class="status-badge-group">
-          <span id="badge-stream-state" class="badge badge-stream-idle">● Stream: Idle</span>
+          <span id="badge-stream-state" class="badge badge-stream-idle">● RF-DETR: Standby</span>
           <span id="card-cam-badge" class="badge badge-unavailable">State: Initializing</span>
         </div>
       </div>
@@ -47,24 +47,24 @@
           <button id="btn-mode-augmented" class="vmode-btn">⚡ Augmented</button>
         </div>
 
-        <!-- Video Wrapper Container (Fullscreen target for both raw video & frames) -->
+        <!-- 720x480 Media Viewport with Hardware-Accelerated Video & Canvas Overlay -->
         <div class="media-frame-wrapper" id="media-container">
           <video id="raw-video-player" autoplay muted playsinline></video>
-          <img id="augmented-image-feed" alt="Augmented stream loading..." style="display: none;" />
+          <!-- Client-Side Overlay Canvas positioned directly over video -->
+          <canvas id="detection-overlay-canvas" width="720" height="480"></canvas>
 
           <div id="live-indicator-overlay" class="live-pill">
             <span class="live-dot"></span> <span id="live-indicator-text">LIVE</span>
           </div>
 
           <div id="cv-offline-notice" style="display: none;" class="stream-overlay-notice">
-            <span>Inference Pipeline Offline</span>
-            <small>Model is not currently submitting inference frames. Switched to raw camera view.</small>
+            <span>Detection Pipeline Standby</span>
+            <small>Worker is connecting to video stream...</small>
           </div>
         </div>
 
-        <!-- Custom Video Controls (Play/Pause & Fullscreen only) -->
+        <!-- Custom Video Controls (Fullscreen only) -->
         <div class="custom-video-controls" id="custom-video-controls">
-          <button id="btn-play-pause" class="vid-ctrl-btn">⏸ Pause</button>
           <span class="vid-status-tag" id="vid-status-tag">● Live Stream (MnDOT)</span>
           <button id="btn-fullscreen" class="vid-ctrl-btn">⛶ Fullscreen</button>
         </div>
@@ -132,6 +132,6 @@
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     crossorigin="">
   </script>
-  <script src="./js/app.js?v=20261104_v4"></script>
+  <script src="./js/app.js?v=20261109_v1"></script>
 </body>
 </html>
