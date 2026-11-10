@@ -1,5 +1,6 @@
 let map = null;
-let defaultBounds = null;
+let defaultCenter = null;
+let defaultZoom = null;
 let markersMap = {};
 let allCameras = [];
 let currentFilter = "all";
@@ -38,9 +39,8 @@ function isCameraFollowed(camId) {
 }
 
 function resetMapView() {
-  if (defaultBounds && map) {
-    map.fitBounds(defaultBounds, { padding: [20, 20] });
-    map.setZoom(map.getZoom() + 1);
+  if (defaultCenter && defaultZoom !== null && map) {
+    map.setView(defaultCenter, defaultZoom, { animate: false });
   }
 }
 
@@ -55,8 +55,13 @@ function initMap() {
   resetControl.onAdd = function () {
     const div = L.DomUtil.create("div", "leaflet-bar leaflet-control");
     div.innerHTML = '<a href="#" title="Reset Map View" role="button" style="display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:bold;cursor:pointer;background:#fff;text-decoration:none;color:#333;width:30px;height:30px;line-height:30px;">⟲</a>';
+    
+    L.DomEvent.disableClickPropagation(div);
+    L.DomEvent.disableScrollPropagation(div);
+
     div.onclick = function (e) {
       e.preventDefault();
+      e.stopPropagation();
       resetMapView();
     };
     return div;
@@ -87,8 +92,11 @@ async function loadCameras() {
       .filter(c => c.latitude && c.longitude)
       .map(c => [c.latitude, c.longitude]);
     if (validCoords.length > 0 && map) {
-      defaultBounds = L.latLngBounds(validCoords);
-      resetMapView();
+      const bounds = L.latLngBounds(validCoords);
+      map.fitBounds(bounds, { padding: [20, 20], animate: false });
+      defaultZoom = map.getZoom() + 1;
+      defaultCenter = bounds.getCenter();
+      map.setView(defaultCenter, defaultZoom, { animate: false });
     }
 
     const pilotCam = allCameras.find(c => c.is_default) || allCameras.find(c => c.is_pilot) || allCameras[0];
