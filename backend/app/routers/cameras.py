@@ -1,18 +1,18 @@
 import os
 import time
-import json
+import signal
 import asyncio
-import shutil
 import urllib.parse
 from pathlib import Path
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, WebSocket
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import shutil
 
 from app.database import get_db
-from app.config import SOURCE_ATTRIBUTION, DATA_RETENTION_POLICY, UPLOAD_DIR
+from app.config import SOURCE_ATTRIBUTION, DATA_RETENTION_POLICY, UPLOAD_DIR, DEFAULT_T1, DEFAULT_T2
 from app.camera_service import load_pilot_codes
 from app.models import CameraSourceModel, TrafficMeasurementModel
 from app.schemas import (
@@ -26,6 +26,27 @@ router = APIRouter(prefix="/api/cameras", tags=["Cameras & Status"])
 
 ACTIVE_FOCUS_CAMERA_ID: Optional[str] = None
 SHM_DIR = Path("/dev/shm") if Path("/dev/shm").is_dir() else Path(os.environ.get("TEMP", "/tmp"))
+
+SHUTDOWN_REQUESTED = False
+
+try:
+    orig_sigint = signal.getsignal(signal.SIGINT)
+    def _sigint_handler(sig, frame):
+        global SHUTDOWN_REQUESTED
+        SHUTDOWN_REQUESTED = True
+        if callable(orig_sigint):
+            orig_sigint(sig, frame)
+    signal.signal(signal.SIGINT, _sigint_handler)
+
+    orig_sigterm = signal.getsignal(signal.SIGTERM)
+    def _sigterm_handler(sig, frame):
+        global SHUTDOWN_REQUESTED
+        SHUTDOWN_REQUESTED = True
+        if callable(orig_sigterm):
+            orig_sigterm(sig, frame)
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+except Exception:
+    pass
 
 def get_shm_frame_path(camera_id: str) -> Path:
     safe_name = camera_id.replace("/", "_").replace(":", "_")
@@ -45,17 +66,24 @@ def set_active_focus(payload: dict):
 
 @router.websocket("/{camera_id:path}/ws")
 async def websocket_video_stream(websocket: WebSocket, camera_id: str):
-    """
-    Direct binary WebSocket frame delivery.
-    Sends raw JPEGs directly to the client's canvas buffer at native 30 FPS.
-    """
     await websocket.accept()
     cam_id = urllib.parse.unquote(camera_id)
     frame_path = get_shm_frame_path(cam_id)
     last_mtime = 0.0
 
+    async def client_listener():
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    listener_task = asyncio.create_task(client_listener())
+
     try:
-        while True:
+        while not listener_task.done() and not SHUTDOWN_REQUESTED:
             if frame_path.exists():
                 try:
                     mtime = frame_path.stat().st_mtime
@@ -65,10 +93,16 @@ async def websocket_video_stream(websocket: WebSocket, camera_id: str):
                             data = f.read()
                         await websocket.send_bytes(data)
                 except Exception:
-                    pass
-            await asyncio.sleep(0.015)  # Fast poll to transmit frame immediately upon write
-    except (WebSocketDisconnect, asyncio.CancelledError):
+                    break
+            await asyncio.sleep(0.015)
+    except (asyncio.CancelledError, Exception):
         pass
+    finally:
+        listener_task.cancel()
+        try:
+            await listener_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 @router.get("", response_model=List[CameraItem])
 def list_cameras(pilot_only: bool = False, db: Session = Depends(get_db)):
@@ -178,7 +212,12 @@ def purge_all_replays(db: Session = Depends(get_db)):
     }
 
 @router.get("/{camera_id:path}/status", response_model=CurrentStatusResponse)
-def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
+def get_camera_current_status(
+    camera_id: str,
+    t1: Optional[float] = None,
+    t2: Optional[float] = None,
+    db: Session = Depends(get_db)
+):
     cam_id = urllib.parse.unquote(camera_id)
     cam = db.query(CameraSourceModel).filter(CameraSourceModel.id == cam_id).first()
     if not cam:
@@ -200,10 +239,29 @@ def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
     if latest_meas and latest_meas.timestamp:
         seconds_since = (now - latest_meas.timestamp.replace(tzinfo=timezone.utc)).total_seconds()
 
-    fallback_cams = [code for code in pilot_map.keys() if code != cam.camera_code] if is_pilot else []
-
     frame_path = get_shm_frame_path(cam_id)
     has_active = frame_path.exists() and (time.time() - frame_path.stat().st_mtime) < 4.0
+
+    if cam.current_status in ["stale", "offline"] and has_active:
+        cam.current_status = "recovering"
+        db.commit()
+
+    if cam.current_status in ["stale", "offline", "unavailable", "initializing", "recovering"]:
+        traffic_level = "unable_to_determine"
+    elif latest_meas and latest_meas.flow_per_minute is not None:
+        effective_t1 = t1 if (t1 is not None and t1 > 0) else DEFAULT_T1
+        effective_t2 = t2 if (t2 is not None and t2 > effective_t1) else DEFAULT_T2
+        flow = latest_meas.flow_per_minute
+        if flow < effective_t1:
+            traffic_level = "clear"
+        elif flow < effective_t2:
+            traffic_level = "normal"
+        else:
+            traffic_level = "congested"
+    else:
+        traffic_level = "unable_to_determine"
+
+    fallback_cams = [code for code in pilot_map.keys() if code != cam.camera_code] if is_pilot else []
 
     return CurrentStatusResponse(
         camera_id=cam.id,
@@ -214,7 +272,7 @@ def get_camera_current_status(camera_id: str, db: Session = Depends(get_db)):
         status=cam.current_status,
         vehicle_count=latest_meas.vehicle_count if latest_meas else None,
         flow_per_minute=latest_meas.flow_per_minute if latest_meas else None,
-        traffic_level=latest_meas.traffic_level if latest_meas else "unable_to_determine",
+        traffic_level=traffic_level,
         measurement_time=latest_meas.timestamp if latest_meas else None,
         last_valid_time=cam.last_measurement_time,
         stream_url=cam.stream_url,

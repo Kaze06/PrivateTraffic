@@ -1,14 +1,13 @@
 import sys
 from pathlib import Path
 
-# Ensure backend directory is in sys.path
 BASE_DIR = Path(__file__).resolve().parent.parent
 BACKEND_DIR = BASE_DIR / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -18,7 +17,6 @@ from app.database import Base, get_db
 from app.main import app
 from app.models import CameraSourceModel, TrafficMeasurementModel, AlertRuleModel, AlertEventModel
 
-# StaticPool ensures all connections and worker threads share the single in-memory SQLite instance
 TEST_DATABASE_URL = "sqlite:///:memory:"
 engine = create_engine(
     TEST_DATABASE_URL,
@@ -68,7 +66,6 @@ def test_source_compliance_endpoint():
     assert "Aggregate" in data["data_retention"]
 
 def test_measurement_flow_and_level_calculation():
-    # Submit measurement with 20 vehicles over 60s window
     payload = {
         "camera_id": "camera/test1",
         "vehicle_count": 20,
@@ -80,7 +77,6 @@ def test_measurement_flow_and_level_calculation():
     assert res.status_code == 201
     assert res.json()["traffic_level"] == "normal"
 
-    # Verify status endpoint reflects state updates
     db = TestingSessionLocal()
     cam = db.query(CameraSourceModel).filter_by(id="camera/test1").first()
     cam.current_status = "stale"
@@ -89,17 +85,63 @@ def test_measurement_flow_and_level_calculation():
 
     res_stale = client.get("/api/cameras/camera/test1/status")
     assert res_stale.status_code == 200
-    assert res_stale.json()["status"] == "stale"
+    data = res_stale.json()
+    assert data["status"] == "stale"
+    assert data["traffic_level"] == "unable_to_determine"
+    assert data["last_valid_time"] is not None
+
+def test_user_supplied_t1_t2_thresholds():
+    payload = {
+        "camera_id": "camera/test1",
+        "vehicle_count": 22,
+        "flow_per_minute": 22.0,
+        "source_status": "live",
+        "is_replay": False
+    }
+    res = client.post("/api/measurements", json=payload)
+    assert res.status_code == 201
+
+    res_clear = client.get("/api/cameras/camera/test1/status?t1=30&t2=50")
+    assert res_clear.status_code == 200
+    assert res_clear.json()["traffic_level"] == "clear"
+
+    res_congested = client.get("/api/cameras/camera/test1/status?t1=10&t2=20")
+    assert res_congested.status_code == 200
+    assert res_congested.json()["traffic_level"] == "congested"
+
+def test_recovering_and_offline_transitions():
+    db = TestingSessionLocal()
+    cam = db.query(CameraSourceModel).filter_by(id="camera/test1").first()
+    cam.current_status = "recovering"
+    db.commit()
+    db.close()
+
+    res_rec = client.get("/api/cameras/camera/test1/status")
+    assert res_rec.status_code == 200
+    assert res_rec.json()["status"] == "recovering"
+    assert res_rec.json()["traffic_level"] == "unable_to_determine"
+
+    payload = {
+        "camera_id": "camera/test1",
+        "vehicle_count": 10,
+        "flow_per_minute": 10.0,
+        "source_status": "live",
+        "is_replay": False
+    }
+    res = client.post("/api/measurements", json=payload)
+    assert res.status_code == 201
+
+    res_after = client.get("/api/cameras/camera/test1/status")
+    assert res_after.json()["status"] == "live"
+    assert res_after.json()["traffic_level"] == "clear"
 
 def test_alert_rule_crossing_and_rearm():
-    # 1. Set threshold of 25.0 vpm
     res_rule = client.post("/api/alerts/rules", json={
         "camera_id": "camera/test1",
         "threshold_vpm": 25.0
     })
     assert res_rule.status_code == 201
 
-    # 2. Measurement below threshold (20 vpm) -> No alert
     res_m1 = client.post("/api/measurements", json={
         "camera_id": "camera/test1",
         "vehicle_count": 20,
@@ -110,7 +152,6 @@ def test_alert_rule_crossing_and_rearm():
     assert res_m1.status_code == 201
     assert res_m1.json()["alert_triggered"] is False
 
-    # 3. Measurement crosses threshold (30 vpm) -> Triggers alert
     res_m2 = client.post("/api/measurements", json={
         "camera_id": "camera/test1",
         "vehicle_count": 30,
@@ -121,7 +162,6 @@ def test_alert_rule_crossing_and_rearm():
     assert res_m2.status_code == 201
     assert res_m2.json()["alert_triggered"] is True
 
-    # 4. Successive measurement still above (32 vpm) -> Suppressed, no repeat
     res_m3 = client.post("/api/measurements", json={
         "camera_id": "camera/test1",
         "vehicle_count": 32,
@@ -132,7 +172,6 @@ def test_alert_rule_crossing_and_rearm():
     assert res_m3.status_code == 201
     assert res_m3.json()["alert_triggered"] is False
 
-    # 5. Flow drops below threshold (15 vpm) -> Re-arms
     res_m4 = client.post("/api/measurements", json={
         "camera_id": "camera/test1",
         "vehicle_count": 15,
@@ -142,7 +181,6 @@ def test_alert_rule_crossing_and_rearm():
     })
     assert res_m4.status_code == 201
 
-    # 6. Replay clips must never trigger live alerts
     res_replay = client.post("/api/measurements", json={
         "camera_id": "camera/test1",
         "vehicle_count": 50,

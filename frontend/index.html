@@ -20,7 +20,7 @@
   <div id="sidebar">
     <div class="sidebar-header">
       <h1>PrivateTraffic</h1>
-      <p>GPS-Free Pilot Traffic Camera Status (MnDOT)</p>
+      <p>Real-Time GPS-Free Traffic Flow Monitor (MnDOT)</p>
     </div>
 
     <div class="controls-area">
@@ -41,16 +41,26 @@
         </div>
       </div>
 
+      <div class="threshold-controls-row">
+        <div class="threshold-inputs-group">
+          <label for="input-t1">T1:</label>
+          <input type="number" id="input-t1" value="20" min="1" step="1" title="Clear below T1" />
+        </div>
+        <div class="threshold-inputs-group">
+          <label for="input-t2">T2:</label>
+          <input type="number" id="input-t2" value="45" min="2" step="1" title="Congested at or above T2" />
+        </div>
+        <button id="btn-apply-thresholds" class="vid-ctrl-btn" style="padding: 3px 8px;">Apply</button>
+      </div>
+
       <div id="video-display-area" style="display: none;">
         <div class="video-mode-bar">
           <button id="btn-mode-raw" class="vmode-btn active">📹 Raw Stream (MnDOT)</button>
           <button id="btn-mode-augmented" class="vmode-btn">⚡ Augmented</button>
         </div>
 
-        <!-- 720x480 Media Viewport with Hardware-Accelerated Video & Canvas Overlay -->
         <div class="media-frame-wrapper" id="media-container">
           <video id="raw-video-player" autoplay muted playsinline></video>
-          <!-- Client-Side Overlay Canvas positioned directly over video -->
           <canvas id="detection-overlay-canvas" width="720" height="480"></canvas>
 
           <div id="live-indicator-overlay" class="live-pill">
@@ -63,7 +73,6 @@
           </div>
         </div>
 
-        <!-- Custom Video Controls (Fullscreen only) -->
         <div class="custom-video-controls" id="custom-video-controls">
           <span class="vid-status-tag" id="vid-status-tag">● Live Stream (MnDOT)</span>
           <button id="btn-fullscreen" class="vid-ctrl-btn">⛶ Fullscreen</button>
@@ -87,6 +96,9 @@
 
       <div class="measurement-note" id="val-updated">
         Measurement Time: Not available
+      </div>
+      <div class="measurement-note" id="val-last-valid">
+        Last Valid Time: Not available
       </div>
 
       <div id="ptz-failover-box" style="display:none; font-size: 0.72rem; color: #b45309; background: #fef3c7; padding: 6px; border-radius: 4px; margin-bottom: 8px;">
@@ -132,6 +144,6 @@
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     crossorigin="">
   </script>
-  <script src="./js/app.js?v=20261109_v1"></script>
+  <script src="./js/app.js?v=20261110_v4"></script>
 </body>
 </html>

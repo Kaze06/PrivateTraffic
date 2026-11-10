@@ -14,10 +14,8 @@ WINDOW_SECONDS = 60
 STALE_THRESHOLD_SECONDS = 60
 OFFLINE_THRESHOLD_SECONDS = 180
 
-# Traffic level classification thresholds (veh/min)
-# 0 <= flow < T1: clear, T1 <= flow < T2: normal, flow >= T2: congested
-DEFAULT_T1 = 15.0
-DEFAULT_T2 = 35.0
+DEFAULT_T1 = 20.0
+DEFAULT_T2 = 45.0
 
 FLOW_BAND_CLEAR_MAX = DEFAULT_T1
 FLOW_BAND_NORMAL_MAX = DEFAULT_T2

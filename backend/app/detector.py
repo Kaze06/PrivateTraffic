@@ -18,34 +18,25 @@ for logger_name in ["rfdetr", "rfdetr.models", "rf_detr"]:
 
 logger = logging.getLogger(__name__)
 
-COCO_VEHICLE_CLASS_IDS = {2, 3, 5, 7}  # car, motorcycle, bus, truck
+COCO_VEHICLE_CLASS_IDS = {2, 3, 5, 7}
 
 class DirectVehicleTracker:
-    """
-    Upgraded frame-to-frame vehicle tracker with a short lookback buffer 
-    to absorb frame flickers without generating duplicate track IDs.
-    """
-    def __init__(self, iou_threshold: float = 0.20, max_dist: float = 75.0, max_age: int = 15):
+    def __init__(self, iou_threshold: float = 0.20, max_dist: float = 50.0, max_age: int = 45):
         self.iou_threshold = iou_threshold
         self.max_dist = max_dist
-        self.max_age = max_age  # Frames to remember a lost car (15 frames = ~0.5s)
+        self.max_age = max_age
         self.next_id = 1
-        
-        # Structure: {track_id: {"box": [...], "centroid": (...), "age": 0, "lost_count": 0}}
-        self.tracks = {}  
+        self.tracks = {}
 
     def reset(self):
-        """Clears all tracking memory. Call this during a camera switch!"""
         self.tracks.clear()
         self.next_id = 1
 
     def update_with_detections(self, detections: sv.Detections) -> sv.Detections:
-        # Increment the lost frame counter for all existing tracks
         for tid in self.tracks:
             self.tracks[tid]["lost_count"] += 1
 
         if len(detections) == 0:
-            # Drop tracks that have exceeded max_age even when current frame is empty
             self.tracks = {tid: tr for tid, tr in self.tracks.items() if tr["lost_count"] <= self.max_age}
             detections.tracker_id = np.array([], dtype=int)
             return detections
@@ -64,7 +55,6 @@ class DirectVehicleTracker:
             prev_boxes = np.array([self.tracks[tid]["box"] for tid in prev_ids], dtype=np.float32)
             prev_centroids = np.array([self.tracks[tid]["centroid"] for tid in prev_ids], dtype=np.float32)
 
-            # Match Phase 1: Intersection Over Union (IoU)
             ious = self._compute_iou_batch(boxes, prev_boxes)
             for _ in range(min(len(boxes), len(prev_ids))):
                 max_idx = np.unravel_index(np.argmax(ious), ious.shape)
@@ -78,7 +68,6 @@ class DirectVehicleTracker:
                 ious[d_idx, :] = -1
                 ious[:, p_idx] = -1
 
-            # Match Phase 2: Centroid Proximity (for fast cars shifting between frames)
             for d_idx in range(len(boxes)):
                 if assigned_ids[d_idx] != -1:
                     continue
@@ -97,7 +86,6 @@ class DirectVehicleTracker:
                     assigned_ids[d_idx] = best_tid
                     matched_prev.add(best_tid)
 
-        # Update matched tracks and initialize new ones
         for i in range(len(boxes)):
             box_w = boxes[i][2] - boxes[i][0]
             box_h = boxes[i][3] - boxes[i][1]
@@ -112,16 +100,13 @@ class DirectVehicleTracker:
             else:
                 tid = assigned_ids[i]
 
-            # Lock updated measurements and reset its lost frame counter back to 0
             self.tracks[tid] = {
                 "box": boxes[i],
                 "centroid": centroids[i],
-                "lost_count": 0  
+                "lost_count": 0
             }
 
-        # Evict stale tracks that have been missing for too long
         self.tracks = {tid: tr for tid, tr in self.tracks.items() if tr["lost_count"] <= self.max_age}
-        
         detections.tracker_id = np.array(assigned_ids, dtype=int)
         return detections
 
@@ -138,7 +123,7 @@ class DirectVehicleTracker:
         return inter_area / np.maximum(union_area, 1e-6)
 
 class VehicleDetector:
-    def __init__(self, confidence_threshold: float = 0.25, device: Optional[str] = None):
+    def __init__(self, confidence_threshold: float = 0.30, device: Optional[str] = None):
         self.confidence_threshold = confidence_threshold
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -201,7 +186,6 @@ class VehicleDetector:
 
         tracked = self.tracker.update_with_detections(detections)
 
-        # Draw bounding boxes directly on this exact frame
         annotated = frame_bgr.copy()
         active_count = 0
 
@@ -243,5 +227,4 @@ class VehicleDetector:
         return sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
 
     def reset(self):
-        """Resets the tracking index and memory cache."""
         self.tracker.reset()

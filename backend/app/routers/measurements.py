@@ -27,7 +27,10 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
     ts = payload.timestamp or datetime.now(timezone.utc)
     traffic_level = payload.traffic_level or derive_traffic_level(payload.flow_per_minute)
 
-    source_status = "replay_not_live" if payload.is_replay else payload.source_status
+    is_replay = payload.is_replay or (cam.stream_url and "/uploads" in cam.stream_url)
+    source_status = "replay_not_live" if is_replay else payload.source_status
+    if not is_replay and (source_status in ["live", "live_fresh"] or cam.current_status == "recovering"):
+        source_status = "live"
 
     measurement = TrafficMeasurementModel(
         camera_id=payload.camera_id,
@@ -36,7 +39,7 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
         flow_per_minute=payload.flow_per_minute,
         traffic_level=traffic_level,
         source_status=source_status,
-        is_replay=payload.is_replay
+        is_replay=is_replay
     )
     db.add(measurement)
 
@@ -44,9 +47,8 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
     cam.last_measurement_time = ts
     db.commit()
 
-    # Fixed threshold alert evaluation
     alert_event = evaluate_threshold_crossing(
-        db, payload.camera_id, payload.flow_per_minute, source_status, payload.is_replay
+        db, payload.camera_id, payload.flow_per_minute, source_status, is_replay
     )
 
     return {

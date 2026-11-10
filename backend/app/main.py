@@ -32,6 +32,10 @@ async def lifespan(app: FastAPI):
     monitor_task = asyncio.create_task(start_staleness_monitor(poll_interval=10))
     yield
     monitor_task.cancel()
+    try:
+        await monitor_task
+    except asyncio.CancelledError:
+        pass
 
 app = FastAPI(title="PrivateTraffic Core API", version="1.0", lifespan=lifespan)
 
