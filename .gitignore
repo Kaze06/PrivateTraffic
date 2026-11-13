@@ -1,0 +1,38 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Database files (Do NOT push local DBs)
+*.db
+*.sqlite
+*.sqlite3
+traffic.db
+
+# Environment & local credentials
+.env
+.env.local
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Video recordings or test clips (keep repo small)
+*.mp4
+*.m3u8
+*.ts
+*.avi
+uploads/*
+!uploads/.gitkeep
+
+# IDE files
+.vscode/
+.idea/
+
+# pytest files
+.pytest_cache/

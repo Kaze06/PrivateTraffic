@@ -1,0 +1,26 @@
+[
+  {
+    "camera_code": "C631",
+    "title": "I-35W: I-35W SB @ Johnson St",
+    "stream_url": "https://video.dot.state.mn.us/public/C631.stream/playlist.m3u8",
+    "is_default": true
+  },
+  {
+    "camera_code": "C825",
+    "title": "I-94: I-94 SB @ 7th St",
+    "stream_url": "https://video.dot.state.mn.us/public/C825.stream/playlist.m3u8",
+    "is_default": false
+  },
+  {
+    "camera_code": "C1628",
+    "title": "I-35W: I-35W NB @ Washington Ave",
+    "stream_url": "https://video.dot.state.mn.us/public/C1628.stream/playlist.m3u8",
+    "is_default": false
+  },
+  {
+    "camera_code": "C8351",
+    "title": "I-35W: I-94 WB @ Chicago Ave",
+    "stream_url": "https://video.dot.state.mn.us/public/C8351.stream/playlist.m3u8",
+    "is_default": false
+  }
+]

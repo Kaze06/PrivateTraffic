@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic
+python-dateutil
+rfdetr
+supervision
+torch
+torchvision
+opencv-python-headless
+numpy
+requests
+pytest
+httpx
