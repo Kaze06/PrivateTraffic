@@ -295,12 +295,12 @@ def get_camera_current_status(
         vehicle_count=latest_meas.vehicle_count if usable else None,
         flow_per_minute=latest_meas.flow_per_minute if usable else None,
         traffic_level=level,
-        measurement_time=latest_meas.timestamp if same_mode else None,
-        last_valid_time=cam.last_measurement_time,
+        measurement_time=utc_time(latest_meas.timestamp) if same_mode and latest_meas.timestamp else None,
+        last_valid_time=utc_time(cam.last_measurement_time) if cam.last_measurement_time else None,
         stream_url=cam.stream_url,
         seconds_since_update=seconds_since,
         has_augmented_stream=has_active,
-        is_replay=replay, recording_time=cam.recording_time, calibrated=calibration_valid(cam),
+        is_replay=replay, recording_time=utc_time(cam.recording_time) if cam.recording_time else None, calibrated=calibration_valid(cam),
         no_measurement_reason=reason,
         failover_candidates=fallback_cams
     )

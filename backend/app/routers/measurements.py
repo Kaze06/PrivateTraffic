@@ -22,7 +22,10 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
     if payload.window_seconds != 60 or payload.flow_per_minute != payload.vehicle_count:
         raise HTTPException(status_code=422, detail="First release requires a 60-second window with flow equal to its vehicle count")
 
-    replay = bool(payload.is_replay or is_replay_source(cam))
+    configured_replay = is_replay_source(cam)
+    if payload.is_replay and not configured_replay and cam.recording_time is None:
+        raise HTTPException(status_code=409, detail="Replay configuration is not active; this report belongs to a retired source")
+    replay = bool(payload.is_replay or configured_replay)
     valid = payload.validity == "valid"
     ts = payload.timestamp
     if ts is not None:

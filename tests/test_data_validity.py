@@ -270,3 +270,73 @@ def test_cli_remote_replay_setup_marks_mode_and_recording_time(api, monkeypatch,
     assert worker.configure_cli_replay(url, "2020-01-01T00:00:00Z", {"camera_code": "TEST"}, client) == url
     status = client.get("/api/cameras/test/status").json()
     assert status["is_replay"] and status["recording_time"].startswith("2020-01-01")
+
+
+@pytest.mark.parametrize("validity", ["valid", "invalid"])
+def test_purge_rejects_late_replay_reports_without_restoring_replay_mode(api, monkeypatch, tmp_path, validity):
+    client, sessions, calls = attach_cameras(api, monkeypatch, tmp_path)
+    with sessions() as db:
+        camera = db.get(CameraSourceModel, "test")
+        camera.camera_code = "TEST"
+        camera.stream_url = "https://example.test/live.m3u8"
+        db.commit()
+    worker.configure_cli_replay("https://example.test/clip.mp4", "2020-01-01T00:00:00Z", {"camera_code": "TEST"}, client)
+    assert client.post("/api/cameras/purge-replays").json()["cameras_reset"] == 1
+    report = dict(camera_id="test", timestamp="2020-01-01T00:01:00Z" if validity == "valid" else None,
+                  vehicle_count=0, flow_per_minute=0, is_replay=True, validity=validity,
+                  no_measurement_reason="replay_ended" if validity == "invalid" else None)
+    assert client.post("/api/measurements", json=report).status_code == 409
+    with sessions() as db:
+        camera = db.get(CameraSourceModel, "test")
+        assert camera.current_status == "initializing"
+        assert camera.stream_url == "https://example.test/live.m3u8"
+        assert camera.recording_time is None
+        assert db.query(TrafficMeasurementModel).count() == 0
+    assert calls == []
+
+
+def test_cli_worker_stops_when_replay_is_purged_during_active_read(api, monkeypatch, tmp_path):
+    import httpx
+    import itertools
+    client, sessions, _ = attach_cameras(api, monkeypatch, tmp_path)
+    with sessions() as db:
+        camera = db.get(CameraSourceModel, "test")
+        camera.camera_code = "TEST"
+        camera.stream_url = "https://example.test/live.m3u8"
+        db.commit()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"isolated CLI fixture")
+    measurement_codes = []
+    class Session:
+        def get(self, *args, **kwargs):
+            return client.get(*args, **kwargs)
+        def post(self, url, **kwargs):
+            response = client.post(url, **kwargs)
+            if url.endswith("/api/measurements"):
+                measurement_codes.append(response.status_code)
+            return response
+        def close(self):
+            pass
+    readers = []
+    class Reader:
+        def __init__(self, *args, **kwargs):
+            self.is_replay, self.ended, self.stopped = True, True, False
+            readers.append(self)
+        def get_paced_frame(self):
+            assert client.post("/api/cameras/purge-replays").json()["cameras_reset"] == 1
+            return None
+        def stop(self):
+            self.stopped = True
+    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=Session, RequestException=httpx.HTTPError))
+    monkeypatch.setattr(sys, "argv", ["worker", "--source", str(clip), "--recording-time", "2020-01-01T00:00:00Z"])
+    monkeypatch.setattr(worker, "get_default_camera", lambda session: {"id": "test", "camera_code": "TEST"})
+    monkeypatch.setattr(worker, "VehicleDetector", lambda: SimpleNamespace(reset=lambda: None))
+    monkeypatch.setattr(worker, "MonotonicPacedReader", Reader)
+    ticks = itertools.count(0, 3)
+    monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    worker.main()
+    assert len(readers) == 1 and readers[0].stopped
+    assert measurement_codes == [409]
+    status = client.get("/api/cameras/test/status").json()
+    assert not status["is_replay"] and status["recording_time"] is None
+    assert status["stream_url"] == "https://example.test/live.m3u8"

@@ -307,12 +307,14 @@ def main():
     session = requests.Session()
     camera = get_default_camera(session)
     camera_id = camera["id"]
+    registered_replay = None
     if args.source:
         _, local = resolve_stream_url(args.source)
         if local or args.replay or args.source.startswith("/uploads/"):
             if not args.recording_time:
                 parser.error("Replay --source requires --recording-time with its original timezone-aware recording start")
             args.source = configure_cli_replay(args.source, args.recording_time, camera, session)
+            registered_replay = (args.source, parse_source_time(args.recording_time))
     detector = VehicleDetector()
     reader = None
     signature = None
@@ -327,6 +329,14 @@ def main():
                 active_id = (get_active_focus_camera_id(session) or camera_id) if not args.source else camera_id
                 info = get_camera_status(active_id, session)
                 if info:
+                    if registered_replay and (
+                        not info.get("is_replay")
+                        or info.get("stream_url") != registered_replay[0]
+                        or not info.get("recording_time")
+                        or parse_source_time(info["recording_time"]) != registered_replay[1]
+                    ):
+                        logger.info("Registered replay was retired or replaced; stopping fixed replay worker")
+                        break
                     source, local = resolve_stream_url(args.source or info.get("stream_url"))
                     replay = bool(args.replay or local or info.get("is_replay") or (args.source or info.get("stream_url", "")).startswith("/uploads/"))
                     recording = args.recording_time or info.get("recording_time")
