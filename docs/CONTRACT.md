@@ -18,3 +18,16 @@ Shared schema owner is coordinator. Children may request additional fields befor
 
 ## Acceptance
 Normal error <=10%, peak <=15%, live freshness <=60s, visible alert <=30s. Real source/sample results are external acceptance dependencies; synthetic UI checks prove only software behavior. Replay recording time and mode are always visible. The first release requires only one active source.
+
+
+## Local deployment
+The page-session registry uses one API process. The supported startup runs one Uvicorn worker; multiple processes need shared session liveness before deployment. WebSocket heartbeat is every 5 seconds with a 20-second network-loss timeout. Clean disconnect removes eligibility immediately; a lost network can only be detected within that bound. The browser closes the socket when leaving the page. Restoring a connection requires enabling a new session rule.
+
+## Migration and demo correction
+Additive schema migration runs on startup and preserves existing rows. Existing sessionless rules remain readable but are not eligible for live page alerts. Existing measurements receive a 60-second window default; their historical validity has not been retrospectively established.
+`seed_mock_data.py` now defaults to demo-history.db and writes only a separately labelled replay camera. `tools/demo_server.py` is a local synthetic scenario harness, uses demo-session.db, and is never the production launch command.
+
+## Source-window continuity
+A current live observation must still be at most 60 seconds old. Alert continuity is a different check: consecutive valid source-window endpoints may be at most 65 seconds apart (60-second window plus the worker's maximum 5-second frame gap). Receipt-time jitter and monitor-generated stale state between contiguous windows do not erase the baseline. An invalid/replay report or larger source-time gap resets it. This tolerance does not relax the current-measurement freshness gate.
+
+CLI replay registers recording_time and replay mode through POST /api/cameras/upload-replay before processing. Supply exactly one local video_file or HTTP(S) stream_url, with a timezone-aware recording_time. original_stream_url preserves the previous live source for purge restoration.

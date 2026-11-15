@@ -1,0 +1,20 @@
+const fs=require('fs');const assert=require('assert');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const base=process.env.DEMO_URL||'http://127.0.0.1:8765';
+(async()=>{const browser=await chromium.launch({headless:true});try{
+ const page=await browser.newPage({viewport:{width:1440,height:1000}}); const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
+ await page.goto(base,{waitUntil:"domcontentloaded"});await page.waitForTimeout(1500);await page.waitForFunction(()=>!document.querySelector('#alert-enable').disabled);
+ await page.locator('#alert-threshold').fill('25');await page.locator('#alert-enable').click();await page.waitForFunction(()=>document.querySelector('#alert-state').textContent.includes('Enabled'));
+ const scenario=async(name)=>{let r=await page.request.post(base+'/demo/scenario/'+name);assert(r.ok(),name+': '+await r.text());return r.json()};
+ assert.equal((await scenario('low')).alert_triggered,false);assert.equal((await scenario('high')).alert_triggered,true);await page.waitForFunction(()=>document.querySelector('#alert-events').textContent.includes('30 veh/min'));
+ await page.screenshot({path:'artifacts/alert-desktop.png',fullPage:true});
+ assert.equal((await scenario('high')).alert_triggered,false);await scenario('low');assert.equal((await scenario('high')).alert_triggered,true);
+ await scenario('stale');await page.waitForFunction(()=>document.querySelector('#card-cam-badge').textContent.includes('Stale'));await page.screenshot({path:'artifacts/stale-desktop.png',fullPage:true});
+ await scenario('offline');await page.waitForFunction(()=>document.querySelector('#card-cam-badge').textContent.toLowerCase().includes('offline'));await page.screenshot({path:'artifacts/offline-desktop.png',fullPage:true});
+ assert.equal((await scenario('replay')).alert_triggered,false);await page.waitForFunction(()=>document.querySelector('#card-cam-badge').textContent.toLowerCase().includes('replay'));assert(!(await page.locator('#live-indicator-overlay').isVisible()));await page.screenshot({path:'artifacts/replay-desktop.png',fullPage:true});
+ await page.setViewportSize({width:390,height:844});await page.screenshot({path:'artifacts/replay-mobile.png',fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'horizontal overflow');
+ await page.locator('#alert-disable').click();await page.waitForFunction(()=>document.querySelector('#alert-state').textContent.includes('off'));
+ await page.locator('#alert-enable').click();await page.waitForFunction(()=>document.querySelector('#alert-state').textContent.includes('Enabled'));await scenario('low');
+ await page.close();const afterClose=await browser.newContext();let r=await afterClose.request.post(base+'/demo/scenario/high');assert.equal((await r.json()).alert_triggered,false);await afterClose.close();
+ assert.deepEqual(errors,[]);fs.writeFileSync('artifacts/browser-evidence.json',JSON.stringify({passed:true,checks:['enable','baseline','crossing','repeat suppression','rearm','stale','offline','replay','mobile no overflow','disable','page close'],errors},null,2));console.log('Browser scenarios passed');
+}finally{await browser.close()}})().catch(e=>{console.error(e);process.exit(1)});

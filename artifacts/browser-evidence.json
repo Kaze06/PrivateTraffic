@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "checks": [
+    "enable",
+    "baseline",
+    "crossing",
+    "repeat suppression",
+    "rearm",
+    "stale",
+    "offline",
+    "replay",
+    "mobile no overflow",
+    "disable",
+    "page close"
+  ],
+  "errors": []
+}

@@ -36,3 +36,7 @@ uploads/*
 
 # pytest files
 .pytest_cache/
+
+demo-uploads/
+artifacts/*.log
+artifacts/*.pid
