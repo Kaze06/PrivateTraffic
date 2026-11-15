@@ -20,7 +20,7 @@ def seed():
             return
         recording_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
         db.add(CameraSourceModel(id=camera_id, camera_code="DEMO_HISTORY",
-            title="Synthetic history ¡ª not live traffic", road_name="Software demonstration",
+            title="Synthetic history â€” not live traffic", road_name="Software demonstration",
             latitude=44.97, longitude=-93.26, current_status="replay_not_live",
             recording_time=recording_time, is_pilot=True))
         for minute in range(60):
