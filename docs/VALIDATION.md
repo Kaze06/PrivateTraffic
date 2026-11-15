@@ -2,7 +2,7 @@
 
 ## Candidate
 
-Local branch: integration/first-release. Compare with 14eacad05dd10515b3e05f8407e843258d652889. No remote push or main merge. Functional candidate through fc840dc; subsequent delivery commit adds documentation and demonstration evidence.
+Local branch: integration/first-release. Compare with 14eacad05dd10515b3e05f8407e843258d652889. The user subsequently authorized local main consolidation as a stage baseline; no remote push. Functional candidate through fc840dc; subsequent delivery commit adds documentation and demonstration evidence.
 
 ## Independent review
 
@@ -26,7 +26,7 @@ The demonstration uses its own SQLite database, a clearly labelled synthetic cam
 
 ## Merge decision and next work
 
-The reviewed local software candidate is ready for team inspection. Do not declare the full first release accepted or merge main as a completed release yet. The source permission/timestamp path, permitted samples, real inference and manual count comparison, road calibration and user acceptance remain open in ACCEPTANCE.md. No push or merge is authorized.
+The reviewed local software candidate is ready for team inspection. Consolidation into main records the software development baseline; full first-release acceptance remains pending. The source permission/timestamp path, permitted samples, real inference and manual count comparison, road calibration and user acceptance remain open in ACCEPTANCE.md. Local main consolidation is now authorized as a stage baseline; remote push remains unauthorized.
 
 The next timestamp software block is now implemented as opt-in segment-aligned HLS decoding; source-specific activation still needs authoritative metadata and source permission. It translates per-frame source metadata into UTC capture time; receipt time cannot substitute for it. In parallel, the source owner supplies permitted recordings with original start times and the measurement owner prepares manual 60-second normal/peak counts.
 

@@ -2,6 +2,8 @@
 
 PrivateTraffic is Group 13's Software Engineering course project. The first release follows Task2/Task3: one permitted camera, 60-second vehicle counts and flow, observation time, explicit source state, calibrated road levels, and threshold alerts while the page is open.
 
+Current main milestone: software development baseline. Real-source permission, capture-time evidence, RF-DETR accuracy, road calibration and user acceptance remain open in [the acceptance record](docs/ACCEPTANCE.md).
+
 ## Run the dashboard
 
 Use Python 3.10 or newer. From the repository root:

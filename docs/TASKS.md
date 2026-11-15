@@ -12,7 +12,7 @@ Baseline: 14eacad05dd10515b3e05f8407e843258d652889 (remote checked 2026-11-15).
 | Human/source owner | Permission evidence, permitted recordings and true recording time | External dependency | No evidence supplied yet |
 | Team | Manual normal/peak counts, road calibration, live latency, customer review | External dependency | docs/ACCEPTANCE.md |
 
-History charts, simultaneous multi-camera monitoring and closed-page notifications remain deferred. No push or main merge is authorized.
+History charts, simultaneous multi-camera monitoring and closed-page notifications remain deferred. The user authorized local main integration as a stage baseline; remote push remains unauthorized.
 
 ## Source timestamp block (2026-11-15)
 
@@ -20,3 +20,7 @@ History charts, simultaneous multi-camera monitoring and closed-page notificatio
 - Coordinator probed four configured playlists: HTTP 200, all missing PDT. Exact metadata evidence: artifacts/source-timestamp-probe.json.
 - Integrated suite: 91 passed with PyAV 16.1.0; independent gpt-6.1-sol review passed 17 HLS checks and found no actionable defect.
 - Source owner must provide an allowed feed with documented observation-clock semantics before real live acceptance. See SOURCE_TIMING.md. Existing demo remains a synthetic scenario application.
+
+## Main consolidation
+
+The user elected to consolidate the reviewed candidate into local main before further development. This is a development baseline, with the real-source acceptance gates in ACCEPTANCE.md still open. The previous main history is retained, including its reverted C prototype; the Python application is the continuing implementation. Future development starts from this consolidated baseline on isolated branches.
