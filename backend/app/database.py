@@ -26,7 +26,7 @@ def initialize_schema(bind=engine):
         "camera_sources": {
             "calibration_t1": "FLOAT", "calibration_t2": "FLOAT",
             "calibration_note": "VARCHAR", "recording_time": "DATETIME",
-            "permission_reference": "VARCHAR",
+            "permission_reference": "VARCHAR", "original_stream_url": "VARCHAR",
         },
         "traffic_measurements": {
             "window_seconds": "FLOAT NOT NULL DEFAULT 60",

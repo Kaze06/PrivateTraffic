@@ -17,7 +17,7 @@ def test_additive_migration_preserves_legacy_records(tmp_path):
     initialize_schema(engine)
     initialize_schema(engine)
     with engine.connect() as connection:
-        assert connection.execute(text("SELECT title, calibration_t1 FROM camera_sources")).one() == ('Original road', None)
+        assert connection.execute(text("SELECT title, calibration_t1, original_stream_url FROM camera_sources")).one() == ('Original road', None, None)
         assert connection.execute(text("SELECT id,vehicle_count,window_seconds,validity FROM traffic_measurements")).one() == (7,12,60,'valid')
         assert connection.execute(text("SELECT id,session_id,was_above FROM alert_rules")).one() == (3,None,None)
         assert connection.execute(text("SELECT reason,measurement_id FROM alert_events")).one() == ('original event',None)

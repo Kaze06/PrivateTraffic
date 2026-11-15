@@ -12,6 +12,7 @@ class CameraSourceModel(Base):
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     stream_url = Column(String, nullable=True)
+    original_stream_url = Column(String, nullable=True)
     is_pilot = Column(Boolean, default=False, index=True)
     current_status = Column(String, default="initializing")  # initializing, live, replay, stale, offline, recovering
     last_measurement_time = Column(DateTime, nullable=True)
