@@ -254,6 +254,9 @@ def get_camera_current_status(
     now = datetime.now(timezone.utc)
     seconds_since = (now - utc_time(latest_meas.timestamp)).total_seconds() if latest_meas and latest_meas.timestamp else None
     replay = is_replay_source(cam)
+    same_mode = bool(latest_meas and latest_meas.is_replay == replay)
+    if not same_mode:
+        seconds_since = None
     current_status = source_state(cam, now)
     meta = frame_metadata(cam_id)
     has_active = bool(meta and meta["is_replay"] == replay)
@@ -285,7 +288,7 @@ def get_camera_current_status(
         vehicle_count=latest_meas.vehicle_count if usable else None,
         flow_per_minute=latest_meas.flow_per_minute if usable else None,
         traffic_level=level,
-        measurement_time=latest_meas.timestamp if latest_meas else None,
+        measurement_time=latest_meas.timestamp if same_mode else None,
         last_valid_time=cam.last_measurement_time,
         stream_url=cam.stream_url,
         seconds_since_update=seconds_since,
