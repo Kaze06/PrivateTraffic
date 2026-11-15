@@ -12,7 +12,7 @@ Baseline: 14eacad05dd10515b3e05f8407e843258d652889 (remote checked 2026-11-15).
 | Human/source owner | Permission evidence, permitted recordings and true recording time | External dependency | No evidence supplied yet |
 | Team | Manual normal/peak counts, road calibration, live latency, customer review | External dependency | docs/ACCEPTANCE.md |
 
-History charts, simultaneous multi-camera monitoring and closed-page notifications remain deferred. The user authorized local main integration as a stage baseline; remote push remains unauthorized.
+History charts, simultaneous multi-camera monitoring and closed-page notifications remain deferred. The user authorized main integration and publication of the checked stage baseline to origin/main on 2026-11-15.
 
 ## Source timestamp block (2026-11-15)
 

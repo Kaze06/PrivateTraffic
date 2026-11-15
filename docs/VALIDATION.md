@@ -2,7 +2,7 @@
 
 ## Candidate
 
-Local branch: integration/first-release. Compare with 14eacad05dd10515b3e05f8407e843258d652889. The user subsequently authorized local main consolidation as a stage baseline; no remote push. Functional candidate through fc840dc; subsequent delivery commit adds documentation and demonstration evidence.
+The reviewed integration/first-release candidate has been consolidated into main. Compare with 14eacad05dd10515b3e05f8407e843258d652889. The user subsequently authorized main consolidation and publication of the checked stage baseline to origin/main. Functional candidate through fc840dc; subsequent delivery commit adds documentation and demonstration evidence.
 
 ## Independent review
 
@@ -26,7 +26,7 @@ The demonstration uses its own SQLite database, a clearly labelled synthetic cam
 
 ## Merge decision and next work
 
-The reviewed local software candidate is ready for team inspection. Consolidation into main records the software development baseline; full first-release acceptance remains pending. The source permission/timestamp path, permitted samples, real inference and manual count comparison, road calibration and user acceptance remain open in ACCEPTANCE.md. Local main consolidation is now authorized as a stage baseline; remote push remains unauthorized.
+The reviewed local software candidate is ready for team inspection. Consolidation into main records the software development baseline; full first-release acceptance remains pending. The source permission/timestamp path, permitted samples, real inference and manual count comparison, road calibration and user acceptance remain open in ACCEPTANCE.md. Main consolidation and publication are authorized as a stage baseline; external acceptance gates remain open.
 
 The next timestamp software block is now implemented as opt-in segment-aligned HLS decoding; source-specific activation still needs authoritative metadata and source permission. It translates per-frame source metadata into UTC capture time; receipt time cannot substitute for it. In parallel, the source owner supplies permitted recordings with original start times and the measurement owner prepares manual 60-second normal/peak counts.
 
@@ -46,3 +46,7 @@ Candidate af99e3f adds `backend/app/hls_timestamp.py`, integrates the worker rea
 Metadata-only public probe of C631, C825, C1628 and C8351 returned HTTP 200 but no PROGRAM-DATE-TIME in any selected media playlist. This leaves selected-source live timing acceptance open; permission and the provider's clock semantics are still required. See SOURCE_TIMING.md for supported inputs and the exact source evidence.
 
 This increment changes no frontend files. Prior browser layout/alert evidence remains applicable; the running synthetic demo was not restarted or replaced with a live feed. HLS-specific source results are established by the decoder/worker tests, not by that demo.
+
+## Main publication check (2026-11-15)
+
+Fetched origin before publication: origin/main was 19f37f0. Consolidated main 7692ee8 retains that history and all commits from origin/feature/rfdetr-core-pipeline-and-alerts. Relative to reviewed ef5a49b, consolidation changes only documentation. A fresh test run in the main checkout passed **91 tests**, with the same 9 dependency deprecation warnings. Existing frontend/browser evidence applies to the unchanged implementation. Publication uses a normal fast-forward push, preserving remote history. This milestone is the software development baseline described in README.md; the real-source acceptance record remains open.
