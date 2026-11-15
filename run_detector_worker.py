@@ -1,281 +1,343 @@
 #!/usr/bin/env python3
+"""Source-time vehicle windows. OpenCV alone cannot certify live capture time.
+
+For a permitted live feed, --timestamp-adapter module:function supplies an aware
+source datetime for (stream_url, frame_index, media_position_ms), or None when
+unavailable. The adapter must use authoritative per-frame source metadata, never
+wall-clock receipt time. Replay uses recording_time + original media position.
+"""
 import sys
 import os
 import time
 import argparse
+import importlib
 import threading
 import queue
-import cv2
-import requests
+import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime, timezone
-
-os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
-os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-    "reconnect;1|"
-    "reconnect_at_eof;1|"
-    "reconnect_streamed;1|"
-    "reconnect_delay_max;1|"
-    "rw_timeout;1000000|"
-    "stimeout;1000000|"
-    "http_persistent;1|"
-    "user_agent;Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-)
+from datetime import datetime, timezone, timedelta
 
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR / "backend"))
+from app.detector import VehicleDetector, InferenceUnavailable
+from app.video_stream import get_shm_frame_path, clear_frame
 
-from app.detector import VehicleDetector
-from app.config import WINDOW_SECONDS
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("RFDETR-Worker")
-
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
-SHM_DIR = Path("/dev/shm") if Path("/dev/shm").is_dir() else Path(os.environ.get("TEMP", "/tmp"))
+FRAME_INTERVAL = 1 / 30
 
-NATIVE_WIDTH = 720
-NATIVE_HEIGHT = 480
-TARGET_FPS = 30.0
-FRAME_INTERVAL = 1.0 / TARGET_FPS
 
-def get_shm_frame_path(camera_id: str) -> Path:
-    safe_name = camera_id.replace("/", "_").replace(":", "_")
-    return SHM_DIR / f"pt_frame_{safe_name}.jpg"
+def parse_source_time(value):
+    result = datetime.fromisoformat(value) if isinstance(value, str) else value
+    if result is None or result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError("Source time must include a timezone")
+    return result.astimezone(timezone.utc)
 
-def write_shm_frame(camera_id: str, frame_bgr):
-    ret, buf = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
-    if ret:
-        target = get_shm_frame_path(camera_id)
-        tmp = target.with_suffix(".tmp")
-        try:
-            with open(tmp, "wb") as f:
-                f.write(buf.tobytes())
-            tmp.replace(target)
-        except OSError:
-            pass
+
+@dataclass
+class SourceFrame:
+    image: object
+    observed_at: object
+    sequence: int
+    is_replay: bool
+    reason: str = None
+
 
 class MonotonicPacedReader:
-    def __init__(self, stream_url: str, is_local_file: bool = False):
+    def __init__(self, stream_url, is_local_file=False, *, is_replay=False,
+                 recording_time=None, timestamp_adapter=None):
         self.stream_url = stream_url
         self.is_local_file = is_local_file
+        self.is_replay = is_replay or is_local_file
+        self.recording_time = parse_source_time(recording_time) if recording_time else None
+        self.timestamp_adapter = timestamp_adapter
         self.running = True
-        self.frame_queue = queue.Queue(maxsize=180)
-        self.last_frame = None
-
+        self.ended = False
+        self.frame_queue = queue.Queue(maxsize=180 if self.is_replay else 2)
         self.thread = threading.Thread(target=self._capture_thread, daemon=True)
         self.thread.start()
 
     def _capture_thread(self):
+        import cv2
         cap = cv2.VideoCapture(self.stream_url)
-        if not self.is_local_file:
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-
-        fail_count = 0
-        while self.running:
-            if cap.isOpened() and fail_count < 10:
+        sequence = 0
+        pace_start = time.monotonic()
+        previous_position = None
+        try:
+            while self.running:
                 try:
                     ret, frame = cap.read()
-                except Exception as e:
-                    logger.warning(f"FFmpeg read error encountered: {e}")
+                except Exception:
                     ret, frame = False, None
-
-                if ret and frame is not None:
-                    fail_count = 0
-                    h, w = frame.shape[:2]
-                    if (w, h) != (NATIVE_WIDTH, NATIVE_HEIGHT):
-                        frame = cv2.resize(frame, (NATIVE_WIDTH, NATIVE_HEIGHT), interpolation=cv2.INTER_LINEAR)
-
+                if not ret or frame is None:
+                    if self.is_replay:
+                        self.ended = True
+                        break
+                    cap.release()
+                    time.sleep(0.5)
+                    cap = cv2.VideoCapture(self.stream_url)
+                    continue
+                sequence += 1
+                position = cap.get(cv2.CAP_PROP_POS_MSEC)
+                observed = None
+                reason = None
+                try:
+                    if self.is_replay:
+                        if self.recording_time is None:
+                            reason = "replay_recording_time_unavailable"
+                        elif position < 0 or (previous_position is not None and position <= previous_position):
+                            reason = "replay_media_timestamp_not_increasing"
+                        else:
+                            observed = self.recording_time + timedelta(milliseconds=position)
+                        previous_position = position
+                        delay = pace_start + position / 1000 - time.monotonic()
+                        if 0 < delay < 5:
+                            time.sleep(delay)
+                    elif self.timestamp_adapter:
+                        observed = parse_source_time(self.timestamp_adapter(self.stream_url, sequence, position))
+                    else:
+                        reason = "live_capture_timestamp_unavailable"
+                except Exception:
+                    reason = "source_timestamp_unavailable"
+                packet = SourceFrame(frame, observed, sequence, self.is_replay, reason)
+                while self.running:
                     try:
-                        self.frame_queue.put(frame, timeout=0.1)
+                        self.frame_queue.put(packet, timeout=0.1)
+                        break
                     except queue.Full:
-                        try:
-                            self.frame_queue.get_nowait()
-                            self.frame_queue.put_nowait(frame)
-                        except (queue.Empty, queue.Full):
-                            pass
-
-                    if self.is_local_file:
-                        time.sleep(FRAME_INTERVAL * 0.95)
-                else:
-                    if self.is_local_file:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        continue
-                    fail_count += 1
-                    time.sleep(0.04)
-            else:
-                time.sleep(0.5)
-                if not self.running:
-                    break
-                cap.release()
-                cap = cv2.VideoCapture(self.stream_url)
-                fail_count = 0
-
-        cap.release()
+                        if not self.is_replay:
+                            try:
+                                self.frame_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+        finally:
+            cap.release()
 
     def get_paced_frame(self):
         try:
-            frame = self.frame_queue.get(timeout=FRAME_INTERVAL)
-            self.last_frame = frame
-            return frame
+            return self.frame_queue.get(timeout=FRAME_INTERVAL)
         except queue.Empty:
-            return self.last_frame
+            return None
 
     def stop(self):
         self.running = False
-        if self.thread.is_alive():
-            self.thread.join(timeout=2.0)
+        self.thread.join(timeout=2)
 
-def get_camera_status(camera_id: str, session: requests.Session):
+
+class SourceWindow:
+    """Count distinct tracks observed in the preceding 60 source seconds."""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.start = None
+        self.last_time = None
+        self.ids = {}
+
+    def add(self, observed_at, tracker_ids):
+        if self.last_time is not None:
+            gap = (observed_at - self.last_time).total_seconds()
+            if gap <= 0:
+                self.reset()
+                raise ValueError("source_timestamp_not_increasing")
+            if gap > 5:
+                self.reset()
+                raise ValueError("source_window_interrupted")
+        result = None
+        if self.start is None:
+            self.start = observed_at
+        self.last_time = observed_at
+        for tid in tracker_ids:
+            if int(tid) > 0:
+                self.ids[int(tid)] = observed_at
+        if (observed_at - self.start).total_seconds() >= 60:
+            cutoff = observed_at - timedelta(seconds=60)
+            self.ids = {tid: seen for tid, seen in self.ids.items() if seen > cutoff}
+            result = {"timestamp": observed_at.isoformat(), "vehicle_count": len(self.ids),
+                      "flow_per_minute": float(len(self.ids)), "window_seconds": 60, "validity": "valid"}
+            self.start = observed_at
+            self.ids.clear()
+        return result
+
+
+
+def write_shm_frame(camera_id, image, packet):
+    import cv2
+    ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+    if not ok:
+        return
+    path = get_shm_frame_path(camera_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(encoded.tobytes())
+    tmp.replace(path)
+    meta = path.with_suffix(".json")
+    tmp = meta.with_suffix(".tmp.json")
+    tmp.write_text(json.dumps({"usable": True, "observed_at": packet.observed_at.isoformat(),
+                              "is_replay": packet.is_replay, "written_at": time.time(),
+                              "sequence": f"{packet.observed_at.isoformat()}:{packet.sequence}"}))
+    tmp.replace(meta)
+
+
+def get_camera_status(camera_id, session):
+    import requests
     try:
-        res = session.get(f"{API_BASE_URL}/api/cameras/{camera_id}/status", timeout=2)
-        if res.status_code == 200:
-            return res.json()
-    except Exception:
-        pass
-    return None
+        response = session.get(f"{API_BASE_URL}/api/cameras/{camera_id}/status", timeout=2)
+        return response.json() if response.status_code == 200 else None
+    except requests.RequestException:
+        return None
 
-def get_active_focus_camera_id(session: requests.Session):
+
+def get_active_focus_camera_id(session):
+    import requests
     try:
-        res = session.get(f"{API_BASE_URL}/api/cameras/active-focus", timeout=2)
-        if res.status_code == 200:
-            return res.json().get("active_camera_id")
-    except Exception:
-        pass
-    return None
+        response = session.get(f"{API_BASE_URL}/api/cameras/active-focus", timeout=2)
+        return response.json().get("active_camera_id") if response.status_code == 200 else None
+    except requests.RequestException:
+        return None
 
-def get_default_camera(session: requests.Session):
-    try:
-        res = session.get(f"{API_BASE_URL}/api/cameras?pilot_only=true", timeout=3)
-        if res.status_code == 200:
-            cams = res.json()
-            for c in cams:
-                if c.get("is_default"):
-                    return c
-            if cams:
-                return cams[0]
-    except Exception:
-        pass
-    return {
-        "id": "camera/507320",
-        "camera_code": "C631",
-        "title": "I-35W SB @ Johnson St",
-        "stream_url": "https://video.dot.state.mn.us/public/C631.stream/playlist.m3u8"
-    }
 
-def resolve_stream_url(stream_url: str):
-    is_local = False
-    if str(stream_url).startswith("/uploads/"):
-        local_path = BASE_DIR / stream_url.lstrip("/")
-        if local_path.exists():
-            return str(local_path), True
-        return f"{API_BASE_URL}{stream_url}", False
-    return stream_url, is_local
+def get_default_camera(session):
+    response = session.get(f"{API_BASE_URL}/api/cameras?pilot_only=true", timeout=3)
+    response.raise_for_status()
+    cameras = response.json()
+    if not cameras:
+        raise RuntimeError("No configured camera source")
+    return next((c for c in cameras if c.get("is_default")), cameras[0])
+
+
+def resolve_stream_url(stream_url):
+    if not stream_url:
+        raise ValueError("source_url_unavailable")
+    if stream_url.startswith("/uploads/"):
+        root = Path(os.environ.get("UPLOAD_DIR", str(BASE_DIR / "uploads"))).resolve()
+        path = (root / stream_url[len("/uploads/"):]).resolve()
+        if path.parent != root:
+            raise ValueError("invalid_replay_path")
+        return (str(path), True) if path.is_file() else (f"{API_BASE_URL}{stream_url}", False)
+    return stream_url, Path(stream_url).is_file() if "://" not in stream_url else False
+
+
+class ObservationProcessor:
+    def __init__(self, camera_id, detector, session):
+        self.camera_id, self.detector, self.session = camera_id, detector, session
+        self.window = SourceWindow()
+        self.last_sequence = None
+        self.last_invalid = None
+        self.last_invalid_at = 0
+
+    def submit(self, payload, replay):
+        payload.update(camera_id=self.camera_id, is_replay=replay,
+                       source_status="replay_not_live" if replay else "live")
+        response = self.session.post(f"{API_BASE_URL}/api/measurements", json=payload, timeout=5)
+        response.raise_for_status()
+
+    def invalid(self, reason, replay, observed_at=None):
+        self.window.reset()
+        self.detector.reset()
+        clear_frame(self.camera_id)
+        now = time.monotonic()
+        if reason == self.last_invalid and now - self.last_invalid_at < 10:
+            return
+        self.submit({"timestamp": observed_at.isoformat() if observed_at else None,
+                     "vehicle_count": 0, "flow_per_minute": 0, "window_seconds": 60,
+                     "validity": "invalid", "no_measurement_reason": reason}, replay)
+        self.last_invalid, self.last_invalid_at = reason, now
+
+    def process(self, packet):
+        if packet.sequence == self.last_sequence:
+            self.invalid("source_frame_reused", packet.is_replay, packet.observed_at)
+            return
+        self.last_sequence = packet.sequence
+        if packet.observed_at is None:
+            self.invalid(packet.reason or "source_timestamp_unavailable", packet.is_replay)
+            return
+        observed = parse_source_time(packet.observed_at)
+        if not packet.is_replay and not 0 <= (datetime.now(timezone.utc) - observed).total_seconds() <= 60:
+            self.invalid("source_observation_not_fresh", False, observed)
+            return
+        try:
+            annotated, _, detections = self.detector.process_frame(packet.image)
+            ids = detections.tracker_id if detections.tracker_id is not None else []
+            result = self.window.add(observed, ids)
+        except Exception as exc:
+            reason = str(exc) if isinstance(exc, (InferenceUnavailable, ValueError)) else "vehicle_inference_failed"
+            self.invalid(reason, packet.is_replay, observed)
+            return
+        write_shm_frame(self.camera_id, annotated, packet)
+        self.last_invalid = None
+        if result:
+            self.submit(result, packet.is_replay)
+
 
 def main():
-    parser = argparse.ArgumentParser(description="PrivateTraffic Detection Worker")
-    parser.add_argument("--source", type=str, default=None, help="Fixed video file or stream URL")
+    import requests
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", help="Fixed source; local files are always replay")
+    parser.add_argument("--replay", action="store_true", help="Explicitly mark a remote source as replay")
+    parser.add_argument("--recording-time", help="Original timezone-aware recording start, required for replay")
+    parser.add_argument("--timestamp-adapter", help="Trusted source metadata adapter module:function")
     args = parser.parse_args()
-
-    logger.info("Initializing Vehicle Detection Worker with RF-DETR...")
+    logging.basicConfig(level=logging.INFO)
+    adapter = None
+    if args.timestamp_adapter:
+        module, function = args.timestamp_adapter.split(":", 1)
+        adapter = getattr(importlib.import_module(module), function)
     detector = VehicleDetector()
     session = requests.Session()
-
-    current_cam = get_default_camera(session)
-    camera_id = current_cam["id"]
-
-    status_info = get_camera_status(camera_id, session)
-    initial_url = status_info.get("stream_url") if status_info else current_cam.get("stream_url")
-
-    stream_url, is_local = resolve_stream_url(args.source or initial_url)
-    logger.info(f"Target Camera: {camera_id} | Source: {stream_url} (Local: {is_local})")
-
-    reader = MonotonicPacedReader(stream_url, is_local_file=is_local)
-
-    unique_tracked_ids = set()
-    window_start_time = time.time()
-    last_focus_check_time = time.time()
-
-    logger.info("Buffering initial live segment to establish 1.0x playback lock...")
-    for _ in range(60):
-        if reader.frame_queue.qsize() >= 25 or is_local:
-            break
-        time.sleep(0.01)
-
-    next_frame_time = time.monotonic()
-
+    camera = get_default_camera(session)
+    camera_id = camera["id"]
+    reader = None
+    signature = None
+    processor = None
+    next_focus_check = 0
+    last_packet_at = time.monotonic()
     try:
         while True:
-            t_now = time.time()
-
-            if args.source is None and (t_now - last_focus_check_time > 2.0):
-                last_focus_check_time = t_now
-                active_id = get_active_focus_camera_id(session) or camera_id
-                cam_info = get_camera_status(active_id, session)
-                if cam_info and cam_info.get("stream_url"):
-                    new_stream_url, new_is_local = resolve_stream_url(cam_info["stream_url"])
-                    if active_id != camera_id or new_stream_url != stream_url:
-                        logger.info(f"[Stream Transition] Camera={active_id} (prev {camera_id}), URL={new_stream_url} (Local={new_is_local})")
+            now = time.monotonic()
+            if now >= next_focus_check:
+                next_focus_check = now + 2
+                active_id = (get_active_focus_camera_id(session) or camera_id) if not args.source else camera_id
+                info = get_camera_status(active_id, session)
+                if info:
+                    source, local = resolve_stream_url(args.source or info.get("stream_url"))
+                    replay = bool(args.replay or local or info.get("is_replay") or (args.source or info.get("stream_url", "")).startswith("/uploads/"))
+                    recording = args.recording_time or info.get("recording_time")
+                    new_signature = (active_id, source, replay, recording)
+                    if new_signature != signature:
+                        if reader:
+                            reader.stop()
+                            clear_frame(camera_id)
                         camera_id = active_id
-                        stream_url, is_local = new_stream_url, new_is_local
-                        reader.stop()
-                        reader = MonotonicPacedReader(stream_url, is_local_file=is_local)
+                        reader = MonotonicPacedReader(source, local, is_replay=replay,
+                                                      recording_time=recording, timestamp_adapter=adapter)
                         detector.reset()
-                        unique_tracked_ids.clear()
-                        window_start_time = time.time()
-                        next_frame_time = time.monotonic()
-                        continue
-
-            frame = reader.get_paced_frame()
-
-            if frame is not None:
-                annotated_frame, active_count, detections = detector.process_frame(frame)
-
-                if detections.tracker_id is not None:
-                    for tid in detections.tracker_id:
-                        if int(tid) > 0:
-                            unique_tracked_ids.add(int(tid))
-
-                write_shm_frame(camera_id, annotated_frame)
-
-            elapsed = time.time() - window_start_time
-            if elapsed >= WINDOW_SECONDS:
-                total_unique = len(unique_tracked_ids)
-                flow_vpm = round((total_unique * 60.0) / elapsed, 2)
-                is_replay = "/uploads" in str(stream_url) or "backup" in str(stream_url)
-
-                payload = {
-                    "camera_id": camera_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "vehicle_count": total_unique,
-                    "flow_per_minute": flow_vpm,
-                    "source_status": "replay_not_live" if is_replay else "live",
-                    "is_replay": is_replay
-                }
-
-                try:
-                    res = session.post(f"{API_BASE_URL}/api/measurements", json=payload, timeout=5)
-                    logger.info(f"[Window Complete] Camera={camera_id} Count={total_unique}, Flow={flow_vpm} vpm | Status={res.status_code}")
-                except Exception as ex:
-                    logger.error(f"Failed to submit measurement: {ex}")
-
-                unique_tracked_ids.clear()
-                window_start_time = time.time()
-
-            next_frame_time += FRAME_INTERVAL
-            sleep_time = next_frame_time - time.monotonic()
-
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-            elif sleep_time < -0.10:
-                next_frame_time = time.monotonic()
-
+                        processor = ObservationProcessor(camera_id, detector, session)
+                        signature = new_signature
+                        last_packet_at = now
+            if reader is None:
+                time.sleep(0.1)
+                continue
+            packet = reader.get_paced_frame()
+            try:
+                if packet is not None:
+                    last_packet_at = time.monotonic()
+                    processor.process(packet)
+                elif reader.ended or time.monotonic() - last_packet_at > 2:
+                    processor.invalid("replay_ended" if reader.ended else "source_frames_unavailable", reader.is_replay)
+            except requests.RequestException:
+                logger.exception("Measurement submission failed")
+                processor.window.reset()
     except KeyboardInterrupt:
-        logger.info("Worker stopped by user.")
+        pass
     finally:
-        reader.stop()
+        if reader:
+            reader.stop()
+        clear_frame(camera_id)
+        session.close()
+
 
 if __name__ == "__main__":
     main()

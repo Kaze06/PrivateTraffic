@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import shutil
+import uuid
 
 from app.database import get_db
 from app.config import SOURCE_ATTRIBUTION, DATA_RETENTION_POLICY, UPLOAD_DIR, DEFAULT_T1, DEFAULT_T2
@@ -20,7 +21,9 @@ from app.schemas import (
     CurrentStatusResponse, 
     SourceComplianceResponse
 )
-from app.video_stream import stream_manager
+from app.video_stream import stream_manager, get_shm_frame_path, frame_metadata, clear_frame
+from app.health_monitor import utc_time, source_state, is_replay_source, calibration_valid, traffic_level_for
+from app.routers.alerts import evaluate_threshold_crossing
 
 router = APIRouter(prefix="/api/cameras", tags=["Cameras & Status"])
 
@@ -47,10 +50,6 @@ try:
     signal.signal(signal.SIGTERM, _sigterm_handler)
 except Exception:
     pass
-
-def get_shm_frame_path(camera_id: str) -> Path:
-    safe_name = camera_id.replace("/", "_").replace(":", "_")
-    return SHM_DIR / f"pt_frame_{safe_name}.jpg"
 
 @router.get("/active-focus")
 def get_active_focus():
@@ -84,7 +83,7 @@ async def websocket_video_stream(websocket: WebSocket, camera_id: str):
 
     try:
         while not listener_task.done() and not SHUTDOWN_REQUESTED:
-            if frame_path.exists():
+            if frame_metadata(cam_id):
                 try:
                     mtime = frame_path.stat().st_mtime
                     if mtime > last_mtime:
@@ -154,23 +153,33 @@ def get_source_compliance():
 async def upload_backup_replay(
     camera_code: str = Form(..., examples=["C8351"]),
     video_file: UploadFile = File(...),
+    recording_time: datetime = Form(...),
     db: Session = Depends(get_db)
 ):
     cam = db.query(CameraSourceModel).filter(CameraSourceModel.camera_code == camera_code).first()
     if not cam:
         raise HTTPException(status_code=404, detail=f"No camera found with code: {camera_code}")
 
-    clean_filename = f"{camera_code}_backup_{int(datetime.now().timestamp())}.mp4"
+    if recording_time.tzinfo is None or recording_time.utcoffset() is None:
+        raise HTTPException(status_code=422, detail="recording_time must be timezone-aware")
+    recording_time = recording_time.astimezone(timezone.utc)
+    if recording_time > datetime.now(timezone.utc):
+        raise HTTPException(status_code=422, detail="recording_time cannot be in the future")
+    clean_filename = f"replay_{uuid.uuid4().hex}.mp4"
     disk_path = os.path.join(UPLOAD_DIR, clean_filename)
     
     with open(disk_path, "wb") as buffer:
         shutil.copyfileobj(video_file.file, buffer)
 
     web_accessible_url = f"/uploads/{clean_filename}"
+    if not is_replay_source(cam):
+        cam.original_stream_url = cam.stream_url
     cam.stream_url = web_accessible_url
     cam.current_status = "replay_not_live"
-    cam.last_measurement_time = datetime.now(timezone.utc)
+    cam.recording_time = recording_time
+    clear_frame(cam.id)
     db.commit()
+    evaluate_threshold_crossing(db, cam.id, 0, "replay_not_live", True, validity="invalid")
 
     return {
         "status": "success",
@@ -178,38 +187,46 @@ async def upload_backup_replay(
         "camera_code": cam.camera_code,
         "mode": "replay_not_live",
         "stream_url": web_accessible_url,
+        "recording_time": recording_time,
         "message": f"Backup video configured for {camera_code}. Source set to 'replay_not_live'."
     }
 
 @router.post("/purge-replays")
 def purge_all_replays(db: Session = Depends(get_db)):
+    root = Path(UPLOAD_DIR).resolve()
     deleted_files = 0
-    if os.path.exists(UPLOAD_DIR):
-        for fname in os.listdir(UPLOAD_DIR):
-            fpath = os.path.join(UPLOAD_DIR, fname)
-            try:
-                if os.path.isfile(fpath) or os.path.islink(fpath):
-                    os.unlink(fpath)
-                    deleted_files += 1
-            except Exception:
-                pass
-
-    cams = db.query(CameraSourceModel).all()
     reset_count = 0
-    for cam in cams:
-        if cam.camera_code:
-            cam.stream_url = f"https://video.dot.state.mn.us/public/{cam.camera_code}.stream/playlist.m3u8"
-            if cam.current_status == "replay_not_live":
-                cam.current_status = "initializing"
-                reset_count += 1
-
+    failures = []
+    pilot_map = load_pilot_codes()
+    for cam in db.query(CameraSourceModel).all():
+        if not is_replay_source(cam):
+            continue
+        # Only delete the configured replay, never unrelated uploads or external paths.
+        url = cam.stream_url or ""
+        if url.startswith("/uploads/"):
+            name = urllib.parse.unquote(url[len("/uploads/"):])
+            path = root / name
+            if Path(name).name != name or path.is_symlink() or path.resolve().parent != root:
+                failures.append(cam.id)
+                continue
+            try:
+                if path.is_file():
+                    path.unlink()
+                    deleted_files += 1
+            except OSError:
+                failures.append(cam.id)
+                continue
+        original = getattr(cam, "original_stream_url", None)
+        cam.stream_url = original or pilot_map.get(cam.camera_code, {}).get("stream_url")
+        cam.recording_time = None
+        cam.last_measurement_time = None
+        cam.current_status = "initializing" if cam.stream_url else "unavailable"
+        clear_frame(cam.id)
+        evaluate_threshold_crossing(db, cam.id, 0, cam.current_status, False, validity="invalid")
+        reset_count += 1
     db.commit()
-    return {
-        "status": "success",
-        "deleted_files": deleted_files,
-        "cameras_reset": reset_count,
-        "message": f"Purged {deleted_files} files. Restored {reset_count} cameras back to native live stream."
-    }
+    return {"status": "partial" if failures else "success", "deleted_files": deleted_files,
+            "cameras_reset": reset_count, "failed_camera_ids": failures}
 
 @router.get("/{camera_id:path}/status", response_model=CurrentStatusResponse)
 def get_camera_current_status(
@@ -230,36 +247,31 @@ def get_camera_current_status(
     latest_meas = (
         db.query(TrafficMeasurementModel)
         .filter(TrafficMeasurementModel.camera_id == cam_id)
-        .order_by(TrafficMeasurementModel.timestamp.desc())
+        .order_by(TrafficMeasurementModel.id.desc())
         .first()
     )
 
     now = datetime.now(timezone.utc)
-    seconds_since = None
-    if latest_meas and latest_meas.timestamp:
-        seconds_since = (now - latest_meas.timestamp.replace(tzinfo=timezone.utc)).total_seconds()
-
-    frame_path = get_shm_frame_path(cam_id)
-    has_active = frame_path.exists() and (time.time() - frame_path.stat().st_mtime) < 4.0
-
-    if cam.current_status in ["stale", "offline"] and has_active:
-        cam.current_status = "recovering"
-        db.commit()
-
-    if cam.current_status in ["stale", "offline", "unavailable", "initializing", "recovering"]:
-        traffic_level = "unable_to_determine"
-    elif latest_meas and latest_meas.flow_per_minute is not None:
-        effective_t1 = t1 if (t1 is not None and t1 > 0) else DEFAULT_T1
-        effective_t2 = t2 if (t2 is not None and t2 > effective_t1) else DEFAULT_T2
-        flow = latest_meas.flow_per_minute
-        if flow < effective_t1:
-            traffic_level = "clear"
-        elif flow < effective_t2:
-            traffic_level = "normal"
-        else:
-            traffic_level = "congested"
+    seconds_since = (now - utc_time(latest_meas.timestamp)).total_seconds() if latest_meas and latest_meas.timestamp else None
+    replay = is_replay_source(cam)
+    current_status = source_state(cam, now)
+    meta = frame_metadata(cam_id)
+    has_active = bool(meta and meta["is_replay"] == replay)
+    usable = bool(latest_meas and latest_meas.validity == "valid" and latest_meas.is_replay == replay)
+    if not replay:
+        usable = usable and current_status in {"live", "live_fresh"} and seconds_since is not None and 0 <= seconds_since <= 60
+        if current_status in {"live", "live_fresh"} and not usable:
+            current_status = "stale"
     else:
-        traffic_level = "unable_to_determine"
+        usable = usable and bool(cam.recording_time) and utc_time(latest_meas.timestamp) >= utc_time(cam.recording_time)
+    level = traffic_level_for(cam, latest_meas.flow_per_minute) if usable else "unable_to_determine"
+    reason = None
+    if not usable:
+        reason = (latest_meas.no_measurement_reason if latest_meas and latest_meas.validity != "valid" else None) or (
+            "replay_recording_time_unavailable" if replay and not cam.recording_time else
+            "source_observation_unavailable" if not latest_meas else "source_observation_not_fresh")
+    elif not calibration_valid(cam):
+        reason = "calibration_unavailable"
 
     fallback_cams = [code for code in pilot_map.keys() if code != cam.camera_code] if is_pilot else []
 
@@ -269,15 +281,17 @@ def get_camera_current_status(
         camera_title=cam.title,
         is_pilot=is_pilot,
         is_default=is_default,
-        status=cam.current_status,
-        vehicle_count=latest_meas.vehicle_count if latest_meas else None,
-        flow_per_minute=latest_meas.flow_per_minute if latest_meas else None,
-        traffic_level=traffic_level,
+        status=current_status,
+        vehicle_count=latest_meas.vehicle_count if usable else None,
+        flow_per_minute=latest_meas.flow_per_minute if usable else None,
+        traffic_level=level,
         measurement_time=latest_meas.timestamp if latest_meas else None,
         last_valid_time=cam.last_measurement_time,
         stream_url=cam.stream_url,
         seconds_since_update=seconds_since,
         has_augmented_stream=has_active,
+        is_replay=replay, recording_time=cam.recording_time, calibrated=calibration_valid(cam),
+        no_measurement_reason=reason,
         failover_candidates=fallback_cams
     )
 

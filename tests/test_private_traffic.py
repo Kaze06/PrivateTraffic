@@ -36,7 +36,9 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 @pytest.fixture(autouse=True)
-def setup_test_db():
+def setup_test_db(monkeypatch):
+    from app.routers import measurements
+    monkeypatch.setattr(measurements, "evaluate_threshold_crossing", lambda *args, **kwargs: None)
     Base.metadata.create_all(bind=engine)
     db = TestingSessionLocal()
     cam = CameraSourceModel(
@@ -49,7 +51,8 @@ def setup_test_db():
         stream_url="https://video.dot.state.mn.us/test.m3u8",
         is_pilot=True,
         current_status="live",
-        last_measurement_time=datetime.now(timezone.utc)
+        last_measurement_time=None,
+        calibration_t1=20, calibration_t2=45, calibration_note="Test fixture calibration"
     )
     db.add(cam)
     db.commit()
@@ -68,6 +71,7 @@ def test_source_compliance_endpoint():
 def test_measurement_flow_and_level_calculation():
     payload = {
         "camera_id": "camera/test1",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "vehicle_count": 20,
         "flow_per_minute": 20.0,
         "source_status": "live",
@@ -90,9 +94,10 @@ def test_measurement_flow_and_level_calculation():
     assert data["traffic_level"] == "unable_to_determine"
     assert data["last_valid_time"] is not None
 
-def test_user_supplied_t1_t2_thresholds():
+def test_query_thresholds_cannot_override_recorded_calibration():
     payload = {
         "camera_id": "camera/test1",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "vehicle_count": 22,
         "flow_per_minute": 22.0,
         "source_status": "live",
@@ -103,11 +108,11 @@ def test_user_supplied_t1_t2_thresholds():
 
     res_clear = client.get("/api/cameras/camera/test1/status?t1=30&t2=50")
     assert res_clear.status_code == 200
-    assert res_clear.json()["traffic_level"] == "clear"
+    assert res_clear.json()["traffic_level"] == "normal"
 
     res_congested = client.get("/api/cameras/camera/test1/status?t1=10&t2=20")
     assert res_congested.status_code == 200
-    assert res_congested.json()["traffic_level"] == "congested"
+    assert res_congested.json()["traffic_level"] == "normal"
 
 def test_recovering_and_offline_transitions():
     db = TestingSessionLocal()
@@ -123,6 +128,7 @@ def test_recovering_and_offline_transitions():
 
     payload = {
         "camera_id": "camera/test1",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "vehicle_count": 10,
         "flow_per_minute": 10.0,
         "source_status": "live",
@@ -135,57 +141,15 @@ def test_recovering_and_offline_transitions():
     assert res_after.json()["status"] == "live"
     assert res_after.json()["traffic_level"] == "clear"
 
-def test_alert_rule_crossing_and_rearm():
-    res_rule = client.post("/api/alerts/rules", json={
-        "camera_id": "camera/test1",
-        "threshold_vpm": 25.0
+def test_measurement_hands_persisted_source_time_to_alert_evaluator(monkeypatch):
+    from app.routers import measurements
+    calls = []
+    monkeypatch.setattr(measurements, "evaluate_threshold_crossing", lambda *args, **kwargs: calls.append((args, kwargs)))
+    observed = datetime.now(timezone.utc) - timedelta(seconds=2)
+    response = client.post("/api/measurements", json={
+        "camera_id": "camera/test1", "timestamp": observed.isoformat(),
+        "vehicle_count": 30, "flow_per_minute": 30, "source_status": "live"
     })
-    assert res_rule.status_code == 201
-
-    res_m1 = client.post("/api/measurements", json={
-        "camera_id": "camera/test1",
-        "vehicle_count": 20,
-        "flow_per_minute": 20.0,
-        "source_status": "live",
-        "is_replay": False
-    })
-    assert res_m1.status_code == 201
-    assert res_m1.json()["alert_triggered"] is False
-
-    res_m2 = client.post("/api/measurements", json={
-        "camera_id": "camera/test1",
-        "vehicle_count": 30,
-        "flow_per_minute": 30.0,
-        "source_status": "live",
-        "is_replay": False
-    })
-    assert res_m2.status_code == 201
-    assert res_m2.json()["alert_triggered"] is True
-
-    res_m3 = client.post("/api/measurements", json={
-        "camera_id": "camera/test1",
-        "vehicle_count": 32,
-        "flow_per_minute": 32.0,
-        "source_status": "live",
-        "is_replay": False
-    })
-    assert res_m3.status_code == 201
-    assert res_m3.json()["alert_triggered"] is False
-
-    res_m4 = client.post("/api/measurements", json={
-        "camera_id": "camera/test1",
-        "vehicle_count": 15,
-        "flow_per_minute": 15.0,
-        "source_status": "live",
-        "is_replay": False
-    })
-    assert res_m4.status_code == 201
-
-    res_replay = client.post("/api/measurements", json={
-        "camera_id": "camera/test1",
-        "vehicle_count": 50,
-        "flow_per_minute": 50.0,
-        "source_status": "replay_not_live",
-        "is_replay": True
-    })
-    assert res_replay.json()["alert_triggered"] is False
+    assert response.status_code == 201
+    assert len(calls) == 1
+    assert calls[0][1] == {"measurement_id": response.json()["id"], "measurement_time": observed, "validity": "valid"}

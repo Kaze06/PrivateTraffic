@@ -1,11 +1,8 @@
-import cv2
+from __future__ import annotations
 import time
 import logging
 import warnings
-import numpy as np
-import torch
 from typing import Tuple, List, Optional
-import supervision as sv
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -18,7 +15,25 @@ for logger_name in ["rfdetr", "rfdetr.models", "rf_detr"]:
 
 logger = logging.getLogger(__name__)
 
-COCO_VEHICLE_CLASS_IDS = {2, 3, 5, 7}
+# RF-DETR 1.12.1 preserves COCO category IDs (not contiguous YOLO indices).
+COCO_VEHICLE_CLASS_IDS = {3, 4, 6, 8}
+
+
+class InferenceUnavailable(RuntimeError):
+    """No valid vehicle observation was produced."""
+
+
+def predict_vehicles(engine, frame_rgb, threshold):
+    if engine is None:
+        raise InferenceUnavailable("vehicle_model_unavailable")
+    try:
+        detections = engine.predict(frame_rgb, threshold=threshold)
+        if detections.class_id is None:
+            raise ValueError("Missing category IDs")
+        return detections[[int(cid) in COCO_VEHICLE_CLASS_IDS for cid in detections.class_id]]
+    except Exception as exc:
+        raise InferenceUnavailable("vehicle_inference_failed") from exc
+
 
 class DirectVehicleTracker:
     def __init__(self, iou_threshold: float = 0.20, max_dist: float = 50.0, max_age: int = 45):
@@ -33,6 +48,7 @@ class DirectVehicleTracker:
         self.next_id = 1
 
     def update_with_detections(self, detections: sv.Detections) -> sv.Detections:
+        import numpy as np
         for tid in self.tracks:
             self.tracks[tid]["lost_count"] += 1
 
@@ -112,6 +128,7 @@ class DirectVehicleTracker:
 
     @staticmethod
     def _compute_iou_batch(boxes1: np.ndarray, boxes2: np.ndarray) -> np.ndarray:
+        import numpy as np
         x1 = np.maximum(boxes1[:, None, 0], boxes2[None, :, 0])
         y1 = np.maximum(boxes1[:, None, 1], boxes2[None, :, 1])
         x2 = np.minimum(boxes1[:, None, 2], boxes2[None, :, 2])
@@ -124,6 +141,7 @@ class DirectVehicleTracker:
 
 class VehicleDetector:
     def __init__(self, confidence_threshold: float = 0.30, device: Optional[str] = None):
+        import torch
         self.confidence_threshold = confidence_threshold
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -142,7 +160,7 @@ class VehicleDetector:
             logger.info("Initializing RF-DETR Nano model...")
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                self.model = RFDETRNano()
+                self.model = RFDETRNano(device=self.device)
                 if hasattr(self.model, "inference"):
                     try:
                         self.predictor = self.model.inference()
@@ -156,33 +174,19 @@ class VehicleDetector:
 
             logger.info(f"RF-DETR successfully loaded on {self.device}.")
         except Exception as e:
-            logger.warning(f"Could not initialize RF-DETR ({e}). Using lightweight detector fallback.")
+            logger.warning(f"Could not initialize RF-DETR ({e}). Vehicle measurements are unavailable.")
             self.model = None
             self.predictor = None
 
     def process_frame(self, frame_bgr: np.ndarray) -> Tuple[np.ndarray, int, sv.Detections]:
-        h, w, _ = frame_bgr.shape
+        import cv2
+        import torch
+        if frame_bgr is None or len(frame_bgr.shape) != 3 or frame_bgr.size == 0:
+            raise InferenceUnavailable("invalid_frame")
         engine = self.predictor or self.model
-
-        if engine is not None:
-            try:
-                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                with torch.inference_mode():
-                    raw_detections = engine.predict(frame_rgb, threshold=self.confidence_threshold)
-
-                mask = []
-                for cid in raw_detections.class_id:
-                    mask.append(int(cid) in COCO_VEHICLE_CLASS_IDS)
-                mask = np.array(mask, dtype=bool) if len(mask) > 0 else np.array([], dtype=bool)
-
-                if len(mask) > 0 and np.any(mask):
-                    detections = raw_detections[mask]
-                else:
-                    detections = sv.Detections.empty()
-            except Exception as e:
-                detections = sv.Detections.empty()
-        else:
-            detections = self._fallback_motion_detect(frame_bgr)
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        with torch.inference_mode():
+            detections = predict_vehicles(engine, frame_rgb, self.confidence_threshold)
 
         tracked = self.tracker.update_with_detections(detections)
 
@@ -202,29 +206,6 @@ class VehicleDetector:
                     cv2.putText(annotated, label, (x1 + 3, max(y1 - 4, 14)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
         return annotated, active_count, tracked
-
-    def _fallback_motion_detect(self, frame_bgr: np.ndarray) -> sv.Detections:
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-        edges = cv2.Canny(blurred, 60, 160)
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        boxes = []
-        for c in contours:
-            area = cv2.contourArea(c)
-            if 800 < area < 40000:
-                x, y, w, h = cv2.boundingRect(c)
-                aspect_ratio = float(w) / h
-                if 0.5 < aspect_ratio < 3.5:
-                    boxes.append([x, y, x + w, y + h])
-
-        if not boxes:
-            return sv.Detections.empty()
-
-        xyxy = np.array(boxes, dtype=np.float32)
-        confidence = np.full(len(boxes), 0.70, dtype=np.float32)
-        class_id = np.full(len(boxes), 2, dtype=int)
-        return sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
 
     def reset(self):
         self.tracker.reset()

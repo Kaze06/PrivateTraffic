@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 from datetime import datetime, timezone
 from app.database import SessionLocal
 from app.models import CameraSourceModel
@@ -7,37 +8,52 @@ from app.config import STALE_THRESHOLD_SECONDS, OFFLINE_THRESHOLD_SECONDS
 
 logger = logging.getLogger(__name__)
 
+
+def utc_time(value):
+    # SQLite stores UTC datetimes without an offset. API inputs are checked before storage.
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def is_replay_source(camera):
+    return camera.current_status in {"replay", "replay_not_live"} or bool(camera.stream_url and camera.stream_url.startswith("/uploads/"))
+
+
+def calibration_valid(camera):
+    low, high = camera.calibration_t1, camera.calibration_t2
+    return (low is not None and high is not None and math.isfinite(low) and math.isfinite(high)
+            and 0 < low < high and bool(camera.calibration_note and camera.calibration_note.strip()))
+
+
+def traffic_level_for(camera, flow):
+    if not calibration_valid(camera):
+        return "unable_to_determine"
+    return "clear" if flow < camera.calibration_t1 else "normal" if flow < camera.calibration_t2 else "congested"
+
+
+def source_state(camera, now=None):
+    if is_replay_source(camera):
+        return "replay_not_live"
+    if camera.current_status not in {"live", "live_fresh", "stale", "recovering"}:
+        return camera.current_status
+    if camera.last_measurement_time is None:
+        return "recovering" if camera.current_status == "recovering" else "offline"
+    age = ((now or datetime.now(timezone.utc)) - utc_time(camera.last_measurement_time)).total_seconds()
+    if age < 0 or age > OFFLINE_THRESHOLD_SECONDS:
+        return "offline"
+    if age > STALE_THRESHOLD_SECONDS:
+        return "stale"
+    return camera.current_status
+
+
 async def start_staleness_monitor(poll_interval: int = 10):
-    try:
-        while True:
+    while True:
+        try:
             await asyncio.sleep(poll_interval)
-            db = SessionLocal()
-            now = datetime.now(timezone.utc)
-
-            monitored_cams = db.query(CameraSourceModel).filter(
-                CameraSourceModel.current_status.in_(["live", "replay", "stale", "recovering"])
-            ).all()
-
-            for cam in monitored_cams:
-                if not cam.last_measurement_time:
-                    if cam.current_status not in ["initializing", "replay_not_live"]:
-                        cam.current_status = "offline"
-                    continue
-
-                diff = (now - cam.last_measurement_time.replace(tzinfo=timezone.utc)).total_seconds()
-
-                if diff > OFFLINE_THRESHOLD_SECONDS:
-                    if cam.current_status != "offline":
-                        cam.current_status = "offline"
-                        logger.warning(f"Camera {cam.id} transitioned to OFFLINE (inactive for {int(diff)}s)")
-                elif diff > STALE_THRESHOLD_SECONDS:
-                    if cam.current_status in ["live", "recovering"]:
-                        cam.current_status = "stale"
-                        logger.warning(f"Camera {cam.id} transitioned to STALE (inactive for {int(diff)}s)")
-
-            db.commit()
-            db.close()
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        logger.error(f"Error in staleness health monitor: {e}")
+            with SessionLocal() as db:
+                for camera in db.query(CameraSourceModel).all():
+                    camera.current_status = source_state(camera)
+                db.commit()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("Staleness monitor failed; retrying next interval")

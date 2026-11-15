@@ -1,59 +1,65 @@
 import asyncio
-import time
+import json
 import os
+import time
+import tempfile
 from pathlib import Path
-from typing import Dict, Optional
+from datetime import datetime, timezone
+from urllib.parse import quote
 
-SHM_DIR = Path("/dev/shm") if Path("/dev/shm").is_dir() else Path(os.environ.get("TEMP", "/tmp"))
+# All producers/consumers share this configurable directory; tests use isolated paths.
+SHM_DIR = Path(os.environ.get("FRAME_DIR", str(Path(tempfile.gettempdir()) / "private-traffic-frames")))
+
+
+def get_shm_frame_path(camera_id):
+    return SHM_DIR / ("pt_frame_" + quote(camera_id, safe="") + ".jpg")
+
+
+def frame_metadata(camera_id):
+    path = get_shm_frame_path(camera_id)
+    try:
+        meta = json.loads(path.with_suffix(".json").read_text())
+        if not meta.get("usable") or not path.is_file():
+            return None
+        if not 0 <= time.time() - meta["written_at"] <= 4:
+            return None
+        observed = datetime.fromisoformat(meta["observed_at"])
+        if observed.tzinfo is None:
+            return None
+        if not meta["is_replay"] and not 0 <= (datetime.now(timezone.utc) - observed).total_seconds() <= 60:
+            return None
+        return meta
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def clear_frame(camera_id):
+    path = get_shm_frame_path(camera_id)
+    for target in (path, path.with_suffix(".json")):
+        target.unlink(missing_ok=True)
+
 
 class VideoStreamManager:
-    """
-    Reads the latest frame from zero-latency shared memory and streams it
-    at a smooth, stable 30 FPS to the browser.
-    """
-    def __init__(self):
-        self._last_frame_bytes: Dict[str, bytes] = {}
+    def _get_shm_path(self, camera_id):
+        return get_shm_frame_path(camera_id)
 
-    def _get_shm_path(self, camera_id: str) -> Path:
-        safe_name = camera_id.replace("/", "_").replace(":", "_")
-        return SHM_DIR / f"pt_frame_{safe_name}.jpg"
+    def has_active_stream(self, camera_id, timeout_seconds=4.0):
+        meta = frame_metadata(camera_id)
+        return bool(meta and time.time() - meta["written_at"] <= timeout_seconds)
 
-    def has_active_stream(self, camera_id: str, timeout_seconds: float = 4.0) -> bool:
-        shm_file = self._get_shm_path(camera_id)
-        if shm_file.exists():
-            try:
-                mtime = shm_file.stat().st_mtime
-                return (time.time() - mtime) < timeout_seconds
-            except OSError:
-                return False
-        return False
-
-    async def get_stream(self, camera_id: str):
-        shm_file = self._get_shm_path(camera_id)
-        target_interval = 1.0 / 30.0  # 30 FPS (~33.3ms)
-        last_bytes = None
-
+    async def get_stream(self, camera_id):
+        last_sequence = None
         while True:
-            t0 = time.time()
-
-            # Read latest frame from shared memory (takes ~0.05ms)
-            if shm_file.exists():
+            meta = frame_metadata(camera_id)
+            if meta and meta["sequence"] != last_sequence:
                 try:
-                    with open(shm_file, "rb") as f:
-                        last_bytes = f.read()
-                except (OSError, IOError):
+                    data = get_shm_frame_path(camera_id).read_bytes()
+                    last_sequence = meta["sequence"]
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                           + str(len(data)).encode() + b"\r\n\r\n" + data + b"\r\n")
+                except OSError:
                     pass
+            await asyncio.sleep(0.033)
 
-            if last_bytes:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n"
-                    b"Content-Length: " + str(len(last_bytes)).encode() + b"\r\n\r\n" +
-                    last_bytes + b"\r\n"
-                )
-
-            elapsed = time.time() - t0
-            sleep_time = max(0.005, target_interval - elapsed)
-            await asyncio.sleep(sleep_time)
 
 stream_manager = VideoStreamManager()
