@@ -152,8 +152,9 @@ def get_source_compliance():
 @router.post("/upload-replay")
 async def upload_backup_replay(
     camera_code: str = Form(..., examples=["C8351"]),
-    video_file: UploadFile = File(...),
+    video_file: Optional[UploadFile] = File(None),
     recording_time: datetime = Form(...),
+    stream_url: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     cam = db.query(CameraSourceModel).filter(CameraSourceModel.camera_code == camera_code).first()
@@ -165,13 +166,19 @@ async def upload_backup_replay(
     recording_time = recording_time.astimezone(timezone.utc)
     if recording_time > datetime.now(timezone.utc):
         raise HTTPException(status_code=422, detail="recording_time cannot be in the future")
-    clean_filename = f"replay_{uuid.uuid4().hex}.mp4"
-    disk_path = os.path.join(UPLOAD_DIR, clean_filename)
-    
-    with open(disk_path, "wb") as buffer:
-        shutil.copyfileobj(video_file.file, buffer)
-
-    web_accessible_url = f"/uploads/{clean_filename}"
+    if (video_file is None) == (stream_url is None):
+        raise HTTPException(status_code=422, detail="Supply exactly one video_file or replay stream_url")
+    if stream_url is not None:
+        parsed = urllib.parse.urlparse(stream_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(status_code=422, detail="Replay stream_url must be an HTTP(S) URL")
+        web_accessible_url = stream_url
+    else:
+        clean_filename = f"replay_{uuid.uuid4().hex}.mp4"
+        disk_path = os.path.join(UPLOAD_DIR, clean_filename)
+        with open(disk_path, "wb") as buffer:
+            shutil.copyfileobj(video_file.file, buffer)
+        web_accessible_url = f"/uploads/{clean_filename}"
     if not is_replay_source(cam):
         cam.original_stream_url = cam.stream_url
     cam.stream_url = web_accessible_url

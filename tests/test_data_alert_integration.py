@@ -4,6 +4,7 @@ import pytest
 from test_data_time_gate import api
 from app.routers import alerts, measurements
 from app.models import CameraSourceModel
+from app.health_monitor import source_state
 
 
 @pytest.mark.skipif(not hasattr(alerts, "_sessions"), reason="Requires page-session alert implementation")
@@ -45,3 +46,36 @@ def test_real_routes_crossing_failure_recovery_and_explicit_replay(api, monkeypa
         assert not post(30)
         events = client.get("/api/alerts/events", params={"camera_id": "test", "session_id": session_id}).json()
         assert len(events) == 2
+
+
+@pytest.mark.skipif(not hasattr(alerts, "_sessions"), reason="Requires page-session alert implementation")
+@pytest.mark.parametrize("monitor_stale", [False, True])
+@pytest.mark.parametrize("source_gap, expected_alert", [(60, True), (65, True), (65.01, False)])
+def test_source_window_continuity_survives_receipt_delay_and_monitor_stale(api, monkeypatch, monitor_stale, source_gap, expected_alert):
+    client, sessions, _ = api
+    client.app.include_router(alerts.router)
+    monkeypatch.setattr(measurements, "evaluate_threshold_crossing", alerts.evaluate_threshold_crossing)
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    class Clock(datetime):
+        current = start + timedelta(seconds=0.1)
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+    monkeypatch.setattr(measurements, "datetime", Clock)
+    monkeypatch.setattr(alerts, "datetime", Clock)
+    with client.websocket_connect("/api/alerts/session") as socket:
+        session_id = socket.receive_json()["session_id"]
+        assert client.post("/api/alerts/rules", json={"camera_id": "test", "session_id": session_id, "threshold_vpm": 25}).status_code == 201
+        low = client.post("/api/measurements", json={"camera_id": "test", "timestamp": start.isoformat(), "vehicle_count": 20, "flow_per_minute": 20})
+        assert low.status_code == 201 and not low.json()["alert_triggered"]
+        next_time = start + timedelta(seconds=source_gap)
+        Clock.current = next_time + timedelta(seconds=0.2)
+        if monitor_stale:
+            with sessions() as db:
+                camera = db.get(CameraSourceModel, "test")
+                camera.current_status = source_state(camera, Clock.current)
+                assert camera.current_status == "stale"
+                db.commit()
+        high = client.post("/api/measurements", json={"camera_id": "test", "timestamp": next_time.isoformat(), "vehicle_count": 30, "flow_per_minute": 30})
+        assert high.status_code == 201, high.text
+        assert high.json()["alert_triggered"] is expected_alert

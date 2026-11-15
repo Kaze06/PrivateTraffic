@@ -7,7 +7,7 @@ from typing import Optional
 from app.database import get_db
 from app.models import TrafficMeasurementModel, CameraSourceModel
 from app.schemas import MeasurementCreate, HistoryResponse, HistoricalPoint
-from app.health_monitor import utc_time, traffic_level_for, is_replay_source, source_state
+from app.health_monitor import utc_time, traffic_level_for, is_replay_source, windows_are_contiguous
 from app.routers.alerts import evaluate_threshold_crossing
 
 router = APIRouter(prefix="/api", tags=["Measurements & History"])
@@ -56,8 +56,15 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
     elif not payload.no_measurement_reason or not payload.no_measurement_reason.strip():
         raise HTTPException(status_code=422, detail="Invalid observations require no_measurement_reason")
 
-    if valid and not replay and cam.last_measurement_time and source_state(cam) not in {"live", "live_fresh"}:
-        evaluate_threshold_crossing(db, cam.id, 0, "recovering", False, validity="invalid")
+    if valid and not replay:
+        previous_report = db.query(TrafficMeasurementModel).filter_by(camera_id=cam.id).order_by(
+            TrafficMeasurementModel.id.desc()).first()
+        interrupted = previous_report is not None and (
+            previous_report.validity != "valid" or previous_report.is_replay
+            or not windows_are_contiguous(previous_report.timestamp, ts, payload.window_seconds)
+        )
+        if interrupted:
+            evaluate_threshold_crossing(db, cam.id, 0, "recovering", False, validity="invalid")
     source_status = "replay_not_live" if replay else ("live" if valid else "recovering")
     level = traffic_level_for(cam, payload.flow_per_minute) if valid else "unable_to_determine"
     measurement = TrafficMeasurementModel(

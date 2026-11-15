@@ -7,6 +7,13 @@ from app.models import CameraSourceModel
 from app.config import STALE_THRESHOLD_SECONDS, OFFLINE_THRESHOLD_SECONDS
 
 logger = logging.getLogger(__name__)
+MAX_SOURCE_GAP_SECONDS = 5
+
+
+def windows_are_contiguous(previous_time, current_time, window_seconds=60):
+    """Allow the worker's frame-boundary jitter, never receipt-clock jitter."""
+    gap = (utc_time(current_time) - utc_time(previous_time)).total_seconds()
+    return 0 < gap <= window_seconds + MAX_SOURCE_GAP_SECONDS
 
 
 def utc_time(value):

@@ -23,6 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR / "backend"))
 from app.detector import VehicleDetector, InferenceUnavailable
 from app.video_stream import get_shm_frame_path, clear_frame
+from app.health_monitor import MAX_SOURCE_GAP_SECONDS
 
 logger = logging.getLogger("RFDETR-Worker")
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
@@ -142,7 +143,7 @@ class SourceWindow:
             if gap <= 0:
                 self.reset()
                 raise ValueError("source_timestamp_not_increasing")
-            if gap > 5:
+            if gap > MAX_SOURCE_GAP_SECONDS:
                 self.reset()
                 raise ValueError("source_window_interrupted")
         result = None
@@ -220,6 +221,24 @@ def resolve_stream_url(stream_url):
     return stream_url, Path(stream_url).is_file() if "://" not in stream_url else False
 
 
+def configure_cli_replay(source, recording_time, camera, session):
+    """Register replay mode and original time before submitting any observations."""
+    recording = parse_source_time(recording_time)
+    if not camera.get("camera_code"):
+        raise ValueError("The selected camera needs a camera_code for replay setup")
+    resolved, local = resolve_stream_url(source)
+    data = {"camera_code": camera["camera_code"], "recording_time": recording.isoformat()}
+    endpoint = f"{API_BASE_URL}/api/cameras/upload-replay"
+    if local:
+        with open(resolved, "rb") as video:
+            response = session.post(endpoint, data=data, files={"video_file": (Path(resolved).name, video, "video/mp4")}, timeout=60)
+    else:
+        data["stream_url"] = resolved
+        response = session.post(endpoint, data=data, timeout=10)
+    response.raise_for_status()
+    return response.json()["stream_url"]
+
+
 class ObservationProcessor:
     def __init__(self, camera_id, detector, session):
         self.camera_id, self.detector, self.session = camera_id, detector, session
@@ -285,10 +304,16 @@ def main():
     if args.timestamp_adapter:
         module, function = args.timestamp_adapter.split(":", 1)
         adapter = getattr(importlib.import_module(module), function)
-    detector = VehicleDetector()
     session = requests.Session()
     camera = get_default_camera(session)
     camera_id = camera["id"]
+    if args.source:
+        _, local = resolve_stream_url(args.source)
+        if local or args.replay or args.source.startswith("/uploads/"):
+            if not args.recording_time:
+                parser.error("Replay --source requires --recording-time with its original timezone-aware recording start")
+            args.source = configure_cli_replay(args.source, args.recording_time, camera, session)
+    detector = VehicleDetector()
     reader = None
     signature = None
     processor = None

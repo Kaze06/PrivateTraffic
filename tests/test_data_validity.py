@@ -224,3 +224,49 @@ def test_overlay_rewrite_cannot_refresh_old_source_time(monkeypatch, tmp_path):
         "usable": True, "observed_at": (datetime.now(timezone.utc)-timedelta(seconds=61)).isoformat(),
         "written_at": time.time(), "is_replay": False, "sequence": "old"}))
     assert not video_stream.stream_manager.has_active_stream("test")
+
+
+def test_cli_replay_setup_persists_time_then_real_worker_submission_succeeds(api, monkeypatch, tmp_path):
+    client, sessions, calls = attach_cameras(api, monkeypatch, tmp_path)
+    with sessions() as db:
+        camera = db.get(CameraSourceModel, "test")
+        camera.camera_code = "TEST"
+        camera.stream_url = "https://custom.example/live.m3u8"
+        db.commit()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"isolated upload fixture")
+    source = worker.configure_cli_replay(str(clip), "2020-01-01T00:00:00+08:00", {"camera_code": "TEST"}, client)
+    recording = datetime(2019, 12, 31, 16, tzinfo=timezone.utc)
+    with sessions() as db:
+        camera = db.get(CameraSourceModel, "test")
+        assert camera.recording_time == recording.replace(tzinfo=None)
+        assert camera.current_status == "replay_not_live"
+        assert camera.stream_url == source
+        assert camera.original_stream_url == "https://custom.example/live.m3u8"
+    monkeypatch.setattr(worker, "write_shm_frame", lambda *args: None)
+    detector = SimpleNamespace(process_frame=lambda image: (image, 1, SimpleNamespace(tracker_id=[1])), reset=lambda: None)
+    processor = worker.ObservationProcessor("test", detector, client)
+    for second in range(61):
+        processor.process(worker.SourceFrame(object(), recording + timedelta(seconds=second), second, True))
+    status = client.get("/api/cameras/test/status").json()
+    assert status["is_replay"] and status["vehicle_count"] == 1
+    assert status["measurement_time"].startswith("2019-12-31T16:01:00")
+    with sessions() as db:
+        assert db.query(TrafficMeasurementModel).count() == 1
+        measurement = db.query(TrafficMeasurementModel).one()
+        assert measurement.validity == "valid" and measurement.is_replay
+    assert client.post("/api/cameras/purge-replays").json()["cameras_reset"] == 1
+    with sessions() as db:
+        assert db.get(CameraSourceModel, "test").stream_url == "https://custom.example/live.m3u8"
+    assert clip.exists()  # purge removes the registered copy, not the caller's file
+
+
+def test_cli_remote_replay_setup_marks_mode_and_recording_time(api, monkeypatch, tmp_path):
+    client, sessions, _ = attach_cameras(api, monkeypatch, tmp_path)
+    with sessions() as db:
+        db.get(CameraSourceModel, "test").camera_code = "TEST"
+        db.commit()
+    url = "https://example.test/clip.mp4"
+    assert worker.configure_cli_replay(url, "2020-01-01T00:00:00Z", {"camera_code": "TEST"}, client) == url
+    status = client.get("/api/cameras/test/status").json()
+    assert status["is_replay"] and status["recording_time"].startswith("2020-01-01")
