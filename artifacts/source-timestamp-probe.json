@@ -1,0 +1,42 @@
+[
+  {
+    "camera_code": "C631",
+    "url": "https://video.dot.state.mn.us/public/C631.stream/playlist.m3u8",
+    "checked_at": "2026-11-15T09:15:57.449521+00:00",
+    "master_status": 200,
+    "media_url": "https://video.dot.state.mn.us/public/C631.stream/chunklist_w2043019759.m3u8",
+    "media_status": 200,
+    "media_playlist": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:11\n#EXT-X-MEDIA-SEQUENCE:49019\n#EXT-X-DISCONTINUITY-SEQUENCE:0\n#EXTINF:10.01,\nmedia_w2043019759_49019.ts\n#EXTINF:10.01,\nmedia_w2043019759_49020.ts\n#EXTINF:10.01,\nmedia_w2043019759_49021.ts\n",
+    "has_program_date_time": false
+  },
+  {
+    "camera_code": "C825",
+    "url": "https://video.dot.state.mn.us/public/C825.stream/playlist.m3u8",
+    "checked_at": "2026-11-15T09:15:59.769987+00:00",
+    "master_status": 200,
+    "media_url": "https://video.dot.state.mn.us/public/C825.stream/chunklist_w623328867.m3u8",
+    "media_status": 200,
+    "media_playlist": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:11\n#EXT-X-MEDIA-SEQUENCE:49006\n#EXT-X-DISCONTINUITY-SEQUENCE:0\n#EXTINF:10.01,\nmedia_w623328867_49006.ts\n#EXTINF:10.01,\nmedia_w623328867_49007.ts\n#EXTINF:10.01,\nmedia_w623328867_49008.ts\n",
+    "has_program_date_time": false
+  },
+  {
+    "camera_code": "C1628",
+    "url": "https://video.dot.state.mn.us/public/C1628.stream/playlist.m3u8",
+    "checked_at": "2026-11-15T09:16:02.534620+00:00",
+    "master_status": 200,
+    "media_url": "https://video.dot.state.mn.us/public/C1628.stream/chunklist_w1284266930.m3u8",
+    "media_status": 200,
+    "media_playlist": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:12\n#EXT-X-MEDIA-SEQUENCE:47957\n#EXT-X-DISCONTINUITY-SEQUENCE:0\n#EXTINF:10.0,\nmedia_w1284266930_47957.ts\n#EXTINF:10.0,\nmedia_w1284266930_47958.ts\n#EXTINF:9.999,\nmedia_w1284266930_47959.ts\n",
+    "has_program_date_time": false
+  },
+  {
+    "camera_code": "C8351",
+    "url": "https://video.dot.state.mn.us/public/C8351.stream/playlist.m3u8",
+    "checked_at": "2026-11-15T09:16:07.765036+00:00",
+    "master_status": 200,
+    "media_url": "https://video.dot.state.mn.us/public/C8351.stream/chunklist_w1231950823.m3u8",
+    "media_status": 200,
+    "media_playlist": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:11\n#EXT-X-MEDIA-SEQUENCE:49007\n#EXT-X-DISCONTINUITY-SEQUENCE:0\n#EXTINF:10.01,\nmedia_w1231950823_49007.ts\n#EXTINF:10.01,\nmedia_w1231950823_49008.ts\n#EXTINF:10.01,\nmedia_w1231950823_49009.ts\n",
+    "has_program_date_time": false
+  }
+]

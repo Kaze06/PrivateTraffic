@@ -28,7 +28,7 @@ The demonstration uses its own SQLite database, a clearly labelled synthetic cam
 
 The reviewed local software candidate is ready for team inspection. Do not declare the full first release accepted or merge main as a completed release yet. The source permission/timestamp path, permitted samples, real inference and manual count comparison, road calibration and user acceptance remain open in ACCEPTANCE.md. No push or merge is authorized.
 
-Next implementation focus: implement the selected feed's timestamp adapter for run_detector_worker.py after its authoritative metadata format and source permission are supplied. It translates per-frame source metadata into UTC capture time; receipt time cannot substitute for it. In parallel, the source owner supplies permitted recordings with original start times and the measurement owner prepares manual 60-second normal/peak counts.
+The next timestamp software block is now implemented as opt-in segment-aligned HLS decoding; source-specific activation still needs authoritative metadata and source permission. It translates per-frame source metadata into UTC capture time; receipt time cannot substitute for it. In parallel, the source owner supplies permitted recordings with original start times and the measurement owner prepares manual 60-second normal/peak counts.
 
 ## View and stop
 
@@ -38,3 +38,11 @@ Controls: http://127.0.0.1:8765/demo
 Keep the dashboard open, enable threshold 25, then use Low 20 followed by High 30 in the controls. Repeat High, use Low to rearm, and try Stopped source, Offline and Recorded mode. Screenshots capture these software scenarios.
 
 The background app is left running. From this repository, run `powershell -File tools/stop-demo.ps1` to stop only the demo process on port 8765. To restart with installed dependencies, run `python tools/demo_server.py`.
+
+## Source timestamp increment
+
+Candidate af99e3f adds `backend/app/hls_timestamp.py`, integrates the worker reader, and adds 17 focused tests. Full suite after installing pinned PyAV 16.1.0: **91 passed, 0 failed, 9 existing TestClient deprecation warnings**. Tests encode/decode actual synthetic MPEG-TS with reordered frames and verify source UTC/frame identity; no real traffic video was downloaded. Independent gpt-6.1-sol review reran all 17 HLS tests and found no actionable defect.
+
+Metadata-only public probe of C631, C825, C1628 and C8351 returned HTTP 200 but no PROGRAM-DATE-TIME in any selected media playlist. This leaves selected-source live timing acceptance open; permission and the provider's clock semantics are still required. See SOURCE_TIMING.md for supported inputs and the exact source evidence.
+
+This increment changes no frontend files. Prior browser layout/alert evidence remains applicable; the running synthetic demo was not restarted or replaced with a live feed. HLS-specific source results are established by the decoder/worker tests, not by that demo.

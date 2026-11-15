@@ -13,3 +13,6 @@ requests
 pytest
 httpx
 python-multipart
+
+# Segment-aligned HLS decoding (supports Python 3.10+)
+av==16.1.0

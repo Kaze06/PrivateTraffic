@@ -5,7 +5,7 @@ The local software candidate passes synthetic API and browser checks; independen
 | Gate | Evidence required | Owner | Current state |
 |---|---|---|---|
 | Source permission | Access, reuse, video retention and aggregate retention permission reference | Chen Jiajun / source owner | Pending external evidence |
-| Observation time | Authoritative source timestamp path for chosen feed; UTC display | Data implementation + source owner | Software gate implemented; chosen live source pending |
+| Observation time | Authoritative source timestamp path for chosen feed; UTC display | Data implementation + source owner | Four configured playlists probed: no PROGRAM-DATE-TIME; chosen source needs an authoritative UTC path (SOURCE_TIMING.md) |
 | Count accuracy | Manual and automatic counts over matching 60-second normal/peak windows, error formula and sample identity | Yao Ziyan | Pending permitted samples and manual counts |
 | Road calibration | T1/T2 and supporting selected-road samples, interpretation review | Yao Ziyan | Pending; UI must show unable_to_determine |
 | Freshness and alerts | Source-to-display and crossing-to-alert timings on actual pilot | Song Zian | Synthetic behavior tests only until live pilot exists |

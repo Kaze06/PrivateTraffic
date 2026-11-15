@@ -26,7 +26,15 @@ python run_detector_worker.py --source clip.mp4 --recording-time "2020-01-01T00:
 
 The worker registers replay metadata with the selected pilot camera before processing, and uploads a copy of a local clip. For a permitted remote HTTP(S) recording, also pass `--replay`. Purging replay files restores the original source URL. Set `API_BASE_URL` if the API is not at http://127.0.0.1:8000.
 
-For live input, use `--timestamp-adapter module:function`. The callable receives `(stream_url, frame_index, media_position_ms)` and returns the authoritative timezone-aware source observation time, or `None` when unavailable. An adapter for the selected live feed is still required. OpenCV receipt time alone does not establish capture time; without that evidence the worker reports unavailable measurements. RF-DETR inference and real source throughput remain unverified in the current local acceptance environment.
+For live input, use `--timestamp-adapter module:function`. The callable receives `(stream_url, frame_index, media_position_ms)` and returns the authoritative timezone-aware source observation time, or `None` when unavailable. The four configured MnDOT playlists were checked on 2026-11-15 and contain no absolute PDT anchor; their verified live timing remains unavailable. OpenCV receipt time alone does not establish capture time; without that evidence the worker reports unavailable measurements. RF-DETR inference and real source throughput remain unverified in the current local acceptance environment.
+
+For an allowed **media playlist** whose provider confirms that each segment's PROGRAM-DATE-TIME is the first displayed video's observation time, use:
+
+```powershell
+python run_detector_worker.py --source "https://provider.example/media.m3u8" --hls-pdt --trust-hls-source-clock
+```
+
+This opt-in path decodes each exact segment with PyAV and derives frame UTC from its presentation timestamps. It supports unencrypted, independent, video-only MPEG-TS segments, each with an explicit timezone-aware PDT. Master playlists, audio tracks, encryption, byte ranges and initialization segments are unsupported and yield unavailable measurements. The trust flag records the operator's assertion; obtain the source timing evidence before enabling it. See [source timing and probe evidence](docs/SOURCE_TIMING.md).
 
 ## Inspect software behavior without a live feed
 
