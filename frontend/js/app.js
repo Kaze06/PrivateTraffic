@@ -10,16 +10,6 @@ let hlsInstance = null;
 let augmentedWs = null;
 let currentVideoMode = "raw";
 
-function getThresholdValues() {
-  const t1Input = document.getElementById("input-t1");
-  const t2Input = document.getElementById("input-t2");
-  let t1 = parseFloat(t1Input ? t1Input.value : 20.0);
-  let t2 = parseFloat(t2Input ? t2Input.value : 45.0);
-  if (isNaN(t1) || t1 <= 0) t1 = 20.0;
-  if (isNaN(t2) || t2 <= t1) t2 = Math.max(t1 + 5.0, 45.0);
-  return { t1, t2 };
-}
-
 function getFollowedList() {
   try {
     return JSON.parse(localStorage.getItem("pt_followed_cams") || "[]");
@@ -72,7 +62,8 @@ function initMap() {
 function formatIso(isoString) {
   if (!isoString) return "Not available";
   try {
-    const d = new Date(isoString);
+    const utcValue = /(?:Z|[+-]\d{2}:\d{2})$/i.test(isoString) ? isoString : `${isoString}Z`;
+    const d = new Date(utcValue);
     if (isNaN(d.getTime())) return isoString;
     return d.toISOString().replace("T", " ").substring(0, 19) + " UTC";
   } catch (e) {
@@ -93,8 +84,8 @@ async function loadCameras() {
       .map(c => [c.latitude, c.longitude]);
     if (validCoords.length > 0 && map) {
       const bounds = L.latLngBounds(validCoords);
-      map.fitBounds(bounds, { padding: [20, 20], animate: false });
-      defaultZoom = map.getZoom() + 1;
+      map.fitBounds(bounds, { padding: [20, 20], animate: false, maxZoom: 12 });
+      defaultZoom = Math.min(map.getZoom() + 1, 12);
       defaultCenter = bounds.getCenter();
       map.setView(defaultCenter, defaultZoom, { animate: false });
     }
@@ -168,6 +159,7 @@ function renderCameraList() {
 async function selectCamera(camId, panTo = true) {
   camId = decodeURIComponent(camId);
   currentCameraId = camId;
+  refreshAlerts();
   renderCameraList();
 
   const cam = allCameras.find(c => c.id === camId);
@@ -198,7 +190,7 @@ async function selectCamera(camId, panTo = true) {
   }
 
   const videoArea = document.getElementById("video-display-area");
-  if (videoArea) videoArea.style.display = "block";
+  if (videoArea) videoArea.style.display = cam && cam.stream_url ? "block" : "none";
 
   await fetchAndUpdateStatus();
 
@@ -212,20 +204,27 @@ function updateFollowButtonState() {
   const followBtn = document.getElementById("btn-toggle-follow");
   if (!followBtn || !currentCameraId) return;
   const isF = isCameraFollowed(currentCameraId);
-  followBtn.innerText = isF ? "★ Unfollow this Location" : "☆ Follow this Location";
+  followBtn.innerText = isF ? "Unfollow this Location" : "Follow this Location";
   followBtn.className = isF ? "follow-btn followed" : "follow-btn";
 }
 
 async function fetchAndUpdateStatus() {
   if (!currentCameraId) return;
-  const { t1, t2 } = getThresholdValues();
+  const requestedCamera = currentCameraId;
 
   try {
-    const res = await fetch(`/api/cameras/${encodeURIComponent(currentCameraId)}/status?t1=${t1}&t2=${t2}`);
-    if (!res.ok) return;
+    const res = await fetch(`/api/cameras/${encodeURIComponent(requestedCamera)}/status`);
+    if (!res.ok) throw new Error("Status unavailable");
     const data = await res.json();
+    if (requestedCamera !== currentCameraId) return;
     renderStatusData(data);
-  } catch (e) {}
+    refreshAlerts();
+  } catch (e) {
+    if (requestedCamera !== currentCameraId) return;
+    const camera = allCameras.find(c => c.id === requestedCamera);
+    renderStatusData({camera_title: camera ? camera.title : "Selected location", status: "unavailable",
+      no_measurement_reason: "Cannot reach source status. Waiting to reconnect."});
+  }
 }
 
 function renderStatusData(data) {
@@ -235,7 +234,7 @@ function renderStatusData(data) {
   statusBadge.className = "badge";
 
   let badgeText = data.status || "Unknown";
-  if (data.status === "live" || data.status === "live_fresh") {
+  if (!data.is_replay && (data.status === "live" || data.status === "live_fresh")) {
     statusBadge.classList.add("badge-live");
     badgeText = "Live";
   } else if (data.status === "stale") {
@@ -247,7 +246,7 @@ function renderStatusData(data) {
   } else if (data.status === "offline") {
     statusBadge.classList.add("badge-offline");
     badgeText = "Offline";
-  } else if (data.status === "replay_not_live") {
+  } else if (data.is_replay || ["replay", "replay_not_live"].includes(data.status)) {
     statusBadge.classList.add("badge-replay");
     badgeText = "Replay / Not Live";
   } else {
@@ -264,28 +263,36 @@ function renderStatusData(data) {
     streamStateBadge.innerText = "○ RF-DETR: Standby";
   }
 
-  const isReplay = (data.status === "replay_not_live" || (data.stream_url && data.stream_url.includes("/uploads")));
+  const isReplay = Boolean(data.is_replay) || ["replay", "replay_not_live"].includes(data.status);
+  const isLive = !isReplay && ["live", "live_fresh"].includes(data.status);
   const liveIndicator = document.getElementById("live-indicator-overlay");
   if (liveIndicator) {
-    liveIndicator.style.display = isReplay ? "none" : "flex";
+    liveIndicator.style.display = isLive ? "flex" : "none";
   }
 
   const vidStatusTag = document.getElementById("vid-status-tag");
   if (vidStatusTag) {
-    vidStatusTag.innerText = isReplay ? "● Backup Replay (Not Live)" : "● Live Stream (MnDOT)";
-    vidStatusTag.style.color = isReplay ? "#c084fc" : "#22c55e";
+    vidStatusTag.innerText = isReplay ? "Replay · Not live" : (isLive ? "Live source" : `Source: ${badgeText}`);
+    vidStatusTag.style.color = isReplay ? "#c084fc" : (isLive ? "#22c55e" : "#fbbf24");
   }
 
-  const isSuppressed = ["stale", "offline", "unavailable", "initializing", "recovering"].includes(data.status);
+  const isSuppressed = !isReplay && !isLive;
+  const recording = document.getElementById("recording-time");
+  recording.hidden = !isReplay;
+  recording.textContent = `Recording time: ${formatIso(data.recording_time)}`;
+  document.getElementById("source-reason").textContent = data.no_measurement_reason || "";
+  document.getElementById("calibration-note").textContent = data.calibrated
+    ? "Traffic level uses this source’s recorded calibration."
+    : "Traffic level unavailable: calibration has not been recorded.";
 
-  document.getElementById("val-count").innerText = (data.vehicle_count !== null && data.vehicle_count !== undefined) ? data.vehicle_count : "--";
-  document.getElementById("val-flow").innerText = (data.flow_per_minute !== null && data.flow_per_minute !== undefined) ? Number(data.flow_per_minute).toFixed(1) : "--";
+  document.getElementById("val-count").innerText = (!isSuppressed && data.vehicle_count !== null && data.vehicle_count !== undefined) ? data.vehicle_count : "--";
+  document.getElementById("val-flow").innerText = (!isSuppressed && data.flow_per_minute !== null && data.flow_per_minute !== undefined) ? Number(data.flow_per_minute).toFixed(1) : "--";
 
   const levelVal = document.getElementById("val-level");
   levelVal.className = "metric-val";
 
   if (isSuppressed || data.traffic_level === "unable_to_determine" || !data.traffic_level) {
-    levelVal.innerText = isSuppressed ? "Suppressed" : "--";
+    levelVal.innerText = "Unavailable";
     levelVal.classList.add("level-suppressed");
   } else {
     const raw = String(data.traffic_level).toLowerCase();
@@ -328,8 +335,19 @@ function setupVideoPlayer(cam) {
     augmentedWs = null;
   }
 
-  if (!cam || !cam.stream_url) return;
+  videoEl.pause();
+  videoEl.removeAttribute("src");
+  videoEl.load();
+  if (!cam || !cam.stream_url) {
+    document.getElementById("video-display-area").style.display = "none";
+    return;
+  }
+  document.getElementById("video-display-area").style.display = "block";
 
+  videoEl.onerror = () => {
+    document.getElementById("live-indicator-overlay").style.display = "none";
+    document.getElementById("vid-status-tag").textContent = "Video unavailable";
+  };
   if (currentVideoMode === "raw") {
     overlayCanvas.style.display = "none";
     videoEl.style.display = "block";
@@ -388,11 +406,9 @@ document.addEventListener("DOMContentLoaded", () => {
     setActiveTab(e.target, "followed");
   });
 
-  document.getElementById("btn-apply-thresholds").addEventListener("click", () => {
-    fetchAndUpdateStatus();
-  });
-  document.getElementById("input-t1").addEventListener("change", () => fetchAndUpdateStatus());
-  document.getElementById("input-t2").addEventListener("change", () => fetchAndUpdateStatus());
+  connectAlerts();
+  document.getElementById("alert-form").addEventListener("submit", enableAlerts);
+  document.getElementById("alert-disable").addEventListener("click", disableAlerts);
 
   document.getElementById("btn-mode-raw").addEventListener("click", () => {
     currentVideoMode = "raw";
@@ -448,6 +464,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const camCode = codeInput.value.trim();
       const formData = new FormData();
       formData.append("camera_code", camCode);
+      const recordingTime = document.getElementById("upload-recording-time").value;
+      if (!recordingTime || !Number.isFinite(new Date(recordingTime).getTime())) {
+        msgEl.textContent = "Enter the clip’s recording time.";
+        return;
+      }
+      formData.append("recording_time", new Date(recordingTime).toISOString());
       formData.append("video_file", fileInput.files[0]);
 
       if (msgEl) {
@@ -508,3 +530,119 @@ function setActiveTab(btn, mode) {
   renderMarkers();
   renderCameraList();
 }
+
+// Each page owns a fresh, server-issued connection token. Never persist it.
+let alertSocket = null;
+let alertSession = null;
+let alertHeartbeat = null;
+let alertReconnect = null;
+let alertLeaving = false;
+let lastAlertReply = 0;
+
+function alertMessage(message) {
+  document.getElementById("alert-state").textContent = message;
+}
+
+function connectAlerts() {
+  if (alertLeaving) return;
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(`${scheme}//${location.host}/api/alerts/session`);
+  alertSocket = socket;
+  socket.onmessage = event => {
+    if (socket !== alertSocket) return;
+    lastAlertReply = Date.now();
+    if (event.data === "pong") return;
+    const data = JSON.parse(event.data);
+    alertSession = data.session_id;
+    alertMessage("Alerts off. Choose a threshold and enable for this page.");
+    document.getElementById("alert-enable").disabled = !currentCameraId;
+    refreshAlerts();
+    alertHeartbeat = setInterval(() => {
+      if (Date.now() - lastAlertReply >= data.timeout_seconds * 1000) socket.close();
+      else if (socket.readyState === WebSocket.OPEN) socket.send("ping");
+    }, data.heartbeat_seconds * 1000);
+  };
+  socket.onclose = () => {
+    if (socket !== alertSocket) return;
+    clearInterval(alertHeartbeat);
+    alertSession = null;
+    document.getElementById("alert-enable").disabled = true;
+    document.getElementById("alert-disable").disabled = true;
+    alertMessage("Alerts disconnected. Reconnecting; enable again when connected.");
+    document.getElementById("alert-events").replaceChildren();
+    if (!alertLeaving) alertReconnect = setTimeout(connectAlerts, 2000);
+  };
+  socket.onerror = () => socket.close();
+}
+
+function alertQuery(camera, session) {
+  return new URLSearchParams({ camera_id: camera, session_id: session }).toString();
+}
+
+async function alertRequest(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Could not update alerts.");
+  return data;
+}
+
+async function refreshAlerts() {
+  const camera = currentCameraId, session = alertSession;
+  if (!camera || !session) return;
+  const query = alertQuery(camera, session);
+  try {
+    const [rule, events] = await Promise.all([
+      alertRequest(`/api/alerts/rules?${query}`), alertRequest(`/api/alerts/events?${query}`)
+    ]);
+    if (camera !== currentCameraId || session !== alertSession) return;
+    document.getElementById("alert-enable").disabled = false;
+    document.getElementById("alert-disable").disabled = !rule;
+    document.getElementById("alert-enable").textContent = rule ? "Update threshold" : "Enable alerts";
+    alertMessage(rule ? `Enabled at ${rule.threshold_vpm} veh/min · live observations only.` : "Alerts off for this location.");
+    const list = document.getElementById("alert-events");
+    list.replaceChildren();
+    if (!events.length) {
+      const item = document.createElement("li");
+      item.textContent = "No alerts this session.";
+      list.append(item);
+    }
+    for (const event of events) {
+      const item = document.createElement("li");
+      item.textContent = `${event.flow_at_trigger} veh/min crossed ${event.threshold_vpm} · ${formatIso(event.trigger_time)}`;
+      list.append(item);
+    }
+  } catch (error) {
+    if (camera === currentCameraId && session === alertSession) alertMessage(error.message);
+  }
+}
+
+async function enableAlerts(event) {
+  event.preventDefault();
+  if (!alertSession || !currentCameraId) return;
+  const threshold = Number(document.getElementById("alert-threshold").value);
+  if (!Number.isFinite(threshold) || threshold <= 0) return;
+  try {
+    await alertRequest("/api/alerts/rules", { method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({camera_id: currentCameraId, session_id: alertSession, threshold_vpm: threshold}) });
+    await refreshAlerts();
+  } catch (error) { alertMessage(error.message); }
+}
+
+async function disableAlerts() {
+  if (!alertSession || !currentCameraId) return;
+  try {
+    await alertRequest(`/api/alerts/rules?${alertQuery(currentCameraId, alertSession)}`, {method: "DELETE"});
+    await refreshAlerts();
+  } catch (error) { alertMessage(error.message); }
+}
+
+window.addEventListener("pagehide", () => {
+  alertLeaving = true;
+  clearInterval(alertHeartbeat);
+  clearTimeout(alertReconnect);
+  alertSession = null;
+  if (alertSocket) alertSocket.close();
+});
+window.addEventListener("pageshow", event => {
+  if (event.persisted) { alertLeaving = false; connectAlerts(); }
+});

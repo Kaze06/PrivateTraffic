@@ -41,29 +41,32 @@
         </div>
       </div>
 
-      <div class="threshold-controls-row">
-        <div class="threshold-inputs-group">
-          <label for="input-t1">T1:</label>
-          <input type="number" id="input-t1" value="20" min="1" step="1" title="Clear below T1" />
-        </div>
-        <div class="threshold-inputs-group">
-          <label for="input-t2">T2:</label>
-          <input type="number" id="input-t2" value="45" min="2" step="1" title="Congested at or above T2" />
-        </div>
-        <button id="btn-apply-thresholds" class="vid-ctrl-btn" style="padding: 3px 8px;">Apply</button>
-      </div>
+      <p id="calibration-note" class="measurement-note">Traffic level requires recorded calibration.</p>
+      <section class="alert-panel" aria-label="Page alerts">
+        <form id="alert-form">
+          <label for="alert-threshold">Alert threshold (veh/min)</label>
+          <div class="alert-controls">
+            <input id="alert-threshold" type="number" min="0.1" step="any" value="25" required />
+            <button id="alert-enable" type="submit" disabled>Enable alerts</button>
+            <button id="alert-disable" type="button" disabled>Disable</button>
+          </div>
+        </form>
+        <p id="alert-state" role="status">Connecting alerts…</p>
+        <p class="measurement-note">While this page is connected, a rise from below your threshold triggers an alert. The first observation sets the baseline.</p>
+        <ol id="alert-events" aria-live="polite"><li>No alerts this session.</li></ol>
+      </section>
 
       <div id="video-display-area" style="display: none;">
         <div class="video-mode-bar">
-          <button id="btn-mode-raw" class="vmode-btn active">📹 Raw Stream (MnDOT)</button>
-          <button id="btn-mode-augmented" class="vmode-btn">⚡ Augmented</button>
+          <button id="btn-mode-raw" class="vmode-btn active">Raw video</button>
+          <button id="btn-mode-augmented" class="vmode-btn">Detection view</button>
         </div>
 
         <div class="media-frame-wrapper" id="media-container">
           <video id="raw-video-player" autoplay muted playsinline></video>
           <canvas id="detection-overlay-canvas" width="720" height="480"></canvas>
 
-          <div id="live-indicator-overlay" class="live-pill">
+          <div id="live-indicator-overlay" class="live-pill" style="display:none">
             <span class="live-dot"></span> <span id="live-indicator-text">LIVE</span>
           </div>
 
@@ -74,8 +77,8 @@
         </div>
 
         <div class="custom-video-controls" id="custom-video-controls">
-          <span class="vid-status-tag" id="vid-status-tag">● Live Stream (MnDOT)</span>
-          <button id="btn-fullscreen" class="vid-ctrl-btn">⛶ Fullscreen</button>
+          <span class="vid-status-tag" id="vid-status-tag">Source connecting</span>
+          <button id="btn-fullscreen" class="vid-ctrl-btn">Fullscreen</button>
         </div>
       </div>
 
@@ -97,6 +100,8 @@
       <div class="measurement-note" id="val-updated">
         Measurement Time: Not available
       </div>
+      <div class="measurement-note" id="recording-time" hidden></div>
+      <div class="measurement-note" id="source-reason"></div>
       <div class="measurement-note" id="val-last-valid">
         Last Valid Time: Not available
       </div>
@@ -108,7 +113,7 @@
       <button id="btn-toggle-follow" class="follow-btn" style="display: none; margin-bottom: 8px;">Follow this Location</button>
 
       <details style="margin-top: 6px; font-size: 0.75rem; background: #f1f5f9; padding: 6px 8px; border-radius: 4px; border: 1px solid #cbd5e1;">
-        <summary style="cursor: pointer; font-weight: 600; color: #334155;">📁 Manage Backup Videos & Replays</summary>
+        <summary style="cursor: pointer; font-weight: 600; color: #334155;">Manage Backup Videos & Replays</summary>
         <form id="replay-upload-form" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
           <div>
             <label style="display: block; font-size: 0.68rem; color: #64748b;">Target Camera Code:</label>
@@ -118,6 +123,10 @@
             <label style="display: block; font-size: 0.68rem; color: #64748b;">Select Local MP4 Clip:</label>
             <input type="file" id="upload-video-file" accept="video/mp4,video/x-m4v,video/*" style="font-size: 0.72rem;" required />
           </div>
+          <div>
+            <label for="upload-recording-time">Recording time (your local time)</label>
+            <input type="datetime-local" id="upload-recording-time" required />
+          </div>
           <button type="submit" id="btn-submit-replay" style="padding: 5px 8px; font-size: 0.75rem; background: #0f172a; color: white; border: none; border-radius: 4px; cursor: pointer;">
             Upload & Set as Replay Mode
           </button>
@@ -125,7 +134,7 @@
 
         <div style="margin-top: 10px; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
           <button type="button" id="btn-purge-replays" style="width: 100%; padding: 5px 8px; font-size: 0.72rem; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
-            🗑️ Purge All Backups & Reset to Live
+            Purge All Backups & Reset to Live
           </button>
         </div>
         <div id="upload-msg" style="font-size: 0.7rem; margin-top: 6px;"></div>
@@ -144,6 +153,6 @@
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     crossorigin="">
   </script>
-  <script src="./js/app.js?v=20261110_v4"></script>
+  <script src="./js/app.js?v=20261115_sessions"></script>
 </body>
 </html>
