@@ -41,7 +41,7 @@ def parse_source_time(value):
 class SourceFrame:
     image: object
     observed_at: object
-    sequence: int
+    sequence: object
     is_replay: bool
     reason: str = None
 
@@ -125,6 +125,55 @@ class MonotonicPacedReader:
     def stop(self):
         self.running = False
         self.thread.join(timeout=2)
+
+
+class HLSSegmentReader:
+    """Decode an anchored media segment directly; never use OpenCV's playlist cursor."""
+    def __init__(self, stream_url, *, trust_pdt=False):
+        from app.hls_timestamp import SegmentClock
+        self.clock = SegmentClock(stream_url, trust_pdt=trust_pdt)
+        self.is_replay = self.ended = False
+        self.running = True
+        self.frame_queue = queue.Queue(maxsize=180)
+        self.thread = threading.Thread(target=self._capture_thread, daemon=True)
+        self.thread.start()
+
+    def _capture_thread(self):
+        sequence = 0
+        while self.running:
+            for kind, value in self.clock.poll():
+                sequence += 1
+                if kind == "frame":
+                    image, observed, identity = value
+                    packet = SourceFrame(image, observed, identity, False)
+                else:
+                    packet = SourceFrame(None, None, ("invalid", sequence), False, value)
+                while self.running:
+                    try:
+                        self.frame_queue.put(packet, timeout=0.1)
+                        break
+                    except queue.Full:
+                        pass
+                if not self.running:
+                    break
+            time.sleep(0.5)
+
+    def get_paced_frame(self):
+        try:
+            return self.frame_queue.get(timeout=FRAME_INTERVAL)
+        except queue.Empty:
+            return None
+
+    def stop(self):
+        self.running = False
+        self.thread.join(timeout=2)
+
+
+def create_source_reader(source, local, replay, recording, adapter, hls_pdt=False):
+    if hls_pdt and not replay:
+        return HLSSegmentReader(source, trust_pdt=True)
+    return MonotonicPacedReader(source, local, is_replay=replay,
+                                recording_time=recording, timestamp_adapter=adapter)
 
 
 class SourceWindow:
@@ -275,7 +324,7 @@ class ObservationProcessor:
             return
         observed = parse_source_time(packet.observed_at)
         if not packet.is_replay and not 0 <= (datetime.now(timezone.utc) - observed).total_seconds() <= 60:
-            self.invalid("source_observation_not_fresh", False, observed)
+            self.invalid("source_observation_not_fresh", False)
             return
         try:
             annotated, _, detections = self.detector.process_frame(packet.image)
@@ -298,7 +347,11 @@ def main():
     parser.add_argument("--replay", action="store_true", help="Explicitly mark a remote source as replay")
     parser.add_argument("--recording-time", help="Original timezone-aware recording start, required for replay")
     parser.add_argument("--timestamp-adapter", help="Trusted source metadata adapter module:function")
+    parser.add_argument("--hls-pdt", action="store_true", help="Decode video-only MPEG-TS media segments with explicit per-segment PDT")
+    parser.add_argument("--trust-hls-source-clock", action="store_true", help="Attest PDT denotes the first displayed video sample's UTC observation time")
     args = parser.parse_args()
+    if args.hls_pdt and (not args.trust_hls_source_clock or args.timestamp_adapter or args.replay):
+        parser.error("--hls-pdt requires --trust-hls-source-clock and cannot be combined with replay or a custom adapter")
     logging.basicConfig(level=logging.INFO)
     adapter = None
     if args.timestamp_adapter:
@@ -346,8 +399,7 @@ def main():
                             reader.stop()
                             clear_frame(camera_id)
                         camera_id = active_id
-                        reader = MonotonicPacedReader(source, local, is_replay=replay,
-                                                      recording_time=recording, timestamp_adapter=adapter)
+                        reader = create_source_reader(source, local, replay, recording, adapter, args.hls_pdt)
                         detector.reset()
                         processor = ObservationProcessor(camera_id, detector, session)
                         signature = new_signature
@@ -360,7 +412,7 @@ def main():
                 if packet is not None:
                     last_packet_at = time.monotonic()
                     processor.process(packet)
-                elif reader.ended or time.monotonic() - last_packet_at > 2:
+                elif reader.ended or time.monotonic() - last_packet_at > (35 if isinstance(reader, HLSSegmentReader) else 2):
                     processor.invalid("replay_ended" if reader.ended else "source_frames_unavailable", reader.is_replay)
             except requests.RequestException:
                 logger.exception("Measurement submission failed")
