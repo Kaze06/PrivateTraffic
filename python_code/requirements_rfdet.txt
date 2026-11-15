@@ -1,0 +1,3 @@
+-r requirements.txt
+av==16.1.0
+rfdetr==1.12.1

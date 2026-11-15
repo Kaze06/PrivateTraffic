@@ -24,6 +24,9 @@ INDEX_FIELDS = [
 MANUAL_REQUIRED = ["sample_id", "window_start_utc", "window_end_utc", "manual_count", "annotator"]
 MANUAL_FIELDS = ["sample_id", "window_start_utc", "window_end_utc", "start_offset_seconds",
                  "end_offset_seconds", "manual_count", "annotator"]
+AUTOMATIC_FIELDS = ["sample_id", "scenario", "camera_id", "camera_code", "window_start_utc",
+                    "window_end_utc", "start_offset_seconds", "end_offset_seconds",
+                    "count_rule", "count_line_y", "model_version", "automatic_count", "report_sha256"]
 COMPARISON_FIELDS = [
     "sample_id", "scenario", "camera_id", "camera_code", "window_start_utc",
     "window_end_utc", "start_offset_seconds", "end_offset_seconds", "count_rule", "count_line_y",
@@ -209,14 +212,26 @@ def prepare(manifest_path, output_dir):
                "end_offset_seconds": _offsets(sample, start, end)[1],
                "manual_count": "", "annotator": ""}
               for sample in samples for start, end, _ in sample["windows"]]
+    automatic = [{
+        "sample_id": sample["sample_id"], "scenario": sample["scenario"],
+        "camera_id": sample["camera_id"], "camera_code": sample["camera_code"],
+        "window_start_utc": start.isoformat(), "window_end_utc": end.isoformat(),
+        "start_offset_seconds": _offsets(sample, start, end)[0],
+        "end_offset_seconds": _offsets(sample, start, end)[1],
+        "count_rule": sample["count_rule"], "count_line_y": sample["count_line_y"],
+        "model_version": sample["model_version"], "automatic_count": count,
+        "report_sha256": sample["report_sha256"],
+    } for sample in samples for start, end, count in sample["windows"]]
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    targets = [output_dir / "sample_index.csv", output_dir / "manual_counts_template.csv"]
+    targets = [output_dir / "sample_index.csv", output_dir / "manual_counts_template.csv",
+               output_dir / "automatic_counts.csv"]
     for target in targets:
         if target.exists():
             raise EvidenceError(f"refusing to overwrite existing evidence: {target}")
     _write_csv(targets[0], INDEX_FIELDS, _index_rows(samples))
     _write_csv(targets[1], MANUAL_FIELDS, manual)
+    _write_csv(targets[2], AUTOMATIC_FIELDS, automatic)
     return {"samples": len(samples), "windows": len(manual)}
 
 

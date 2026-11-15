@@ -69,6 +69,10 @@ class CountEvidenceTests(unittest.TestCase):
         self.assertEqual(row["start_offset_seconds"], "0.000")
         self.assertEqual(row["end_offset_seconds"], "60.000")
         self.assertEqual(row["manual_count"], "")
+        with (out / "automatic_counts.csv").open(newline="", encoding="utf-8-sig") as stream:
+            automatic = list(csv.DictReader(stream))[0]
+        self.assertEqual(automatic["automatic_count"], "11")
+        self.assertEqual(automatic["window_end_utc"], row["window_end_utc"])
 
     def test_prepare_does_not_partially_write_when_output_exists(self):
         out = self.root / "evidence"

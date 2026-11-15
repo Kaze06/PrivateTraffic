@@ -39,6 +39,17 @@ The two real-backend integration tests run automatically when this folder is ins
 
 The detector uses background subtraction and centroid matching as an initial moving-target baseline. It has not been validated against real road footage; compare its output with manual counts before reporting detection accuracy. The line position, minimum target area, and camera viewpoint affect counts. Only downward crossings are counted.
 
+## Capture RF-DETR automatic counts from a local MP4
+
+Use an interpreter with `requirements_rfdet.txt` installed. This adds the repository's pinned RF-DETR Nano and PyAV dependencies; model weights are downloaded on first use. `recording_auto_counts.py` reads MP4 presentation timestamps, calls the existing `VehicleDetector` and `SourceWindow`, and writes only aggregate JSONL reports. It processes one complete 60-second window by default and does not save decoded frames. On a CPU-only machine, inference may take several minutes per window.
+
+```powershell
+python -m pip install -r requirements_rfdet.txt
+python recording_auto_counts.py D:\permitted_samples\recording.mp4 --camera-id camera/507269 --recording-time 2026-11-01T06:58:25-06:00 --repo D:\path\to\PrivateTraffic --reports-out D:\python_code\evidence\recording_reports.jsonl
+```
+
+The output uses the product worker's `unique_tracks_present` rule, not the Y4M module's downward line crossing rule. The model output is an automatic count and cannot serve as its own accuracy ground truth. For manual review, count each distinct visible car, motorcycle, bus or truck in the exact 60-second window across both directions and all visible lanes, without counting a vehicle twice within one window. The same vehicle may appear in adjacent windows. Keep source videos local and out of GitHub.
+
 ## P0-2: prepare real-sample counting evidence
 
 `count_evidence.py` prepares the sample index and aligns manual counting rows to valid 60-second automatic reports. It does **not** create human ground truth, grant video permission, or certify that a clip is real. Source-owner permission, retention terms, normal and peak recordings, and original recording times are still required. Keep raw clips, permission records, and completed results outside GitHub unless their terms explicitly allow sharing.
@@ -68,7 +79,7 @@ Create a JSON manifest after obtaining the recordings. Each `reports_path` is a 
 
 The standalone Y4M module uses `downward_line_crossing` and requires `count_line_y`. The repository RF-DETR worker counts `unique_tracks_present` within each 60-second window; for that rule set `count_line_y` to `null`. A human annotator must follow the selected rule and the same visible road area. Do not compare the two rules as if they meant the same count.
 
-Run `prepare` to hash the clip and report file and produce `sample_index.csv` plus `manual_counts_template.csv`. The template gives each video's exact start/end offsets and UTC times for the corresponding 60-second report. A human annotator watches those windows and fills `manual_count` and `annotator` in a copy of the template, saved as `manual_counts.csv`.
+Run `prepare` to hash the clip and report file and produce `sample_index.csv`, `automatic_counts.csv`, and `manual_counts_template.csv`. The template gives each video's exact start/end offsets and UTC times for the corresponding 60-second report. A human annotator watches those windows and fills `manual_count` and `annotator` in a copy of the template, saved as `manual_counts.csv`.
 
 ```powershell
 python count_evidence.py prepare --manifest D:\permitted_samples\samples.json --output-dir D:\python_code\evidence\run_01\prepare
