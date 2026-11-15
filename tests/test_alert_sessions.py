@@ -201,14 +201,33 @@ def test_camera_state_overrides_live_measurement_claim(setup, source_state):
         assert events(client,session)==[]
 
 
-def test_gap_requires_new_baseline(setup):
-    client,factory=setup
+@pytest.mark.parametrize("source_gap, expected", [(60, True), (60.1, True), (65, True), (65.001, False), (120, False)])
+def test_source_window_continuity_with_receipt_jitter(setup, monkeypatch, source_gap, expected):
+    client, factory = setup
+    start = datetime.now(timezone.utc)
+    class Clock(datetime):
+        current = start + timedelta(milliseconds=100)
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+    monkeypatch.setattr(alerts, "datetime", Clock)
     with client.websocket_connect("/api/alerts/session") as ws:
-        session=ws.receive_json()["session_id"]
-        created=rule(client,session)
-        assert not observe(factory,10)
-        with factory() as db:
-            db.get(AlertRuleModel,created["id"]).last_seen_at=datetime.now(timezone.utc)-timedelta(seconds=61)
-            db.commit()
-        assert not observe(factory,40)
-        assert events(client,session)==[]
+        session = ws.receive_json()["session_id"]
+        rule(client, session)
+        assert not observe(factory, 10, changes={"timestamp":start})
+        # Arrival includes processing jitter; source time determines continuity.
+        Clock.current = start + timedelta(seconds=source_gap, milliseconds=200)
+        assert observe(factory, 40, changes={"timestamp":start + timedelta(seconds=source_gap)}) is expected
+        assert len(events(client, session)) == int(expected)
+
+
+def test_invalid_window_requires_new_baseline_after_recovery(setup):
+    client, factory = setup
+    with client.websocket_connect("/api/alerts/session") as ws:
+        session = ws.receive_json()["session_id"]
+        rule(client, session)
+        assert not observe(factory, 10)
+        assert not observe(factory, 0, changes={"validity":"invalid", "source_status":"recovering"})
+        assert not observe(factory, 40)
+        assert not observe(factory, 10)
+        assert observe(factory, 40)

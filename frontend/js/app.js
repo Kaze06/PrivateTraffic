@@ -227,6 +227,29 @@ async function fetchAndUpdateStatus() {
   }
 }
 
+function measurementReasonText(reason) {
+  const messages = {
+    calibration_unavailable: "Traffic level unavailable: calibration has not been recorded.",
+    replay_recording_time_unavailable: "Add the recording time to use this replay’s measurements.",
+    source_observation_unavailable: "Waiting for the first valid measurement.",
+    source_observation_not_fresh: "The latest measurement is out of date. Waiting for a fresh observation.",
+    replay_media_timestamp_not_increasing: "Replay timing stopped advancing. Measurements are paused.",
+    live_capture_timestamp_unavailable: "Live video has no usable capture time. Measurements are paused.",
+    source_timestamp_unavailable: "The observation time is unavailable. Measurements are paused.",
+    source_timestamp_not_increasing: "Video timing stopped advancing. Waiting for a new observation.",
+    source_window_interrupted: "Video was interrupted. Collecting a new 60-second measurement.",
+    vehicle_model_unavailable: "Vehicle detection is unavailable. Measurements are paused.",
+    vehicle_inference_failed: "Vehicle detection failed. Waiting for a valid observation.",
+    invalid_frame: "The video frame could not be read. Waiting for a usable frame.",
+    source_url_unavailable: "No video source is configured for this location.",
+    invalid_replay_path: "The replay file is unavailable. Choose another recording."
+  };
+  if (!reason) return "";
+  if (messages[reason]) return messages[reason];
+  return /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(reason)
+    ? "No usable measurement is available. Waiting for the source to recover." : reason;
+}
+
 function renderStatusData(data) {
   document.getElementById("card-cam-title").innerText = data.camera_title;
 
@@ -280,10 +303,14 @@ function renderStatusData(data) {
   const recording = document.getElementById("recording-time");
   recording.hidden = !isReplay;
   recording.textContent = `Recording time: ${formatIso(data.recording_time)}`;
-  document.getElementById("source-reason").textContent = data.no_measurement_reason || "";
-  document.getElementById("calibration-note").textContent = data.calibrated
-    ? "Traffic level uses this source’s recorded calibration."
-    : "Traffic level unavailable: calibration has not been recorded.";
+  const calibrationNote = document.getElementById("calibration-note");
+  const calibrationMissing = data.calibrated === false || data.no_measurement_reason === "calibration_unavailable";
+  calibrationNote.hidden = !calibrationMissing;
+  calibrationNote.textContent = calibrationMissing ? "Traffic level unavailable: calibration has not been recorded." : "";
+  const sourceReason = document.getElementById("source-reason");
+  sourceReason.textContent = data.no_measurement_reason === "calibration_unavailable"
+    ? "" : measurementReasonText(data.no_measurement_reason);
+  sourceReason.hidden = !sourceReason.textContent;
 
   document.getElementById("val-count").innerText = (!isSuppressed && data.vehicle_count !== null && data.vehicle_count !== undefined) ? data.vehicle_count : "--";
   document.getElementById("val-flow").innerText = (!isSuppressed && data.flow_per_minute !== null && data.flow_per_minute !== undefined) ? Number(data.flow_per_minute).toFixed(1) : "--";

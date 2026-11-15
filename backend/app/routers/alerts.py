@@ -20,6 +20,8 @@ from app.schemas import AlertRuleCreate, AlertRuleResponse, AlertEventResponse
 
 router = APIRouter(prefix="/api/alerts", tags=["Alerts"])
 SESSION_TIMEOUT_SECONDS = 20
+# SourceWindow accepts frame gaps up to 5s; its next window ends on a frame.
+SOURCE_WINDOW_JITTER_SECONDS = 5
 _sessions = {}
 _lock = threading.RLock()
 
@@ -93,6 +95,17 @@ def evaluate_threshold_crossing(db: Session, camera_id: str, flow_vpm: float,
             latest = db.query(TrafficMeasurementModel).filter_by(camera_id=camera_id).order_by(
                 TrafficMeasurementModel.timestamp.desc(), TrafficMeasurementModel.id.desc()).first()
             valid = valid and latest.id == measurement.id
+        previous = None
+        if valid:
+            previous = db.query(TrafficMeasurementModel).filter(
+                TrafficMeasurementModel.camera_id == camera_id,
+                TrafficMeasurementModel.id < measurement.id,
+            ).order_by(TrafficMeasurementModel.id.desc()).first()
+        continuous = bool(previous and previous.timestamp and previous.validity == "valid"
+                          and not previous.is_replay and previous.source_status in ("live", "live_fresh"))
+        if continuous:
+            source_gap = (_utc(measurement.timestamp) - _utc(previous.timestamp)).total_seconds()
+            continuous = 0 < source_gap <= measurement.window_seconds + SOURCE_WINDOW_JITTER_SECONDS
         events = []
         for rule in rules:
             if not _active(rule.session_id):
@@ -100,7 +113,7 @@ def evaluate_threshold_crossing(db: Session, camera_id: str, flow_vpm: float,
             if not valid:
                 rule.was_above = None
                 continue
-            if rule.last_seen_at and (now - _utc(rule.last_seen_at)).total_seconds() > 60:
+            if not continuous:
                 rule.was_above = None
             above = flow_vpm >= rule.threshold_vpm
             if rule.was_above is False and above:
