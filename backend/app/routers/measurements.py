@@ -24,7 +24,21 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
     if not cam:
         raise HTTPException(status_code=404, detail="Unknown camera source ID")
 
-    ts = payload.timestamp or datetime.now(timezone.utc)
+    ts = payload.timestamp
+    if ts is None or ts.tzinfo is None or ts.utcoffset() is None:
+        raise HTTPException(status_code=422, detail="An explicit timezone-aware source observation timestamp is required")
+    ts = ts.astimezone(timezone.utc)
+    replay = payload.is_replay or cam.current_status == "replay_not_live" or bool(cam.stream_url and "/uploads/" in cam.stream_url)
+    if not replay:
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        if age < 0 or age > 60:
+            raise HTTPException(status_code=422, detail="Live source observation must be no more than 60 seconds old and not in the future")
+        if cam.last_measurement_time:
+            last_time = cam.last_measurement_time
+            if last_time.tzinfo is None:
+                last_time = last_time.replace(tzinfo=timezone.utc)
+            if ts <= last_time:
+                raise HTTPException(status_code=409, detail="Observation timestamp must increase; duplicate or late observation rejected")
     traffic_level = payload.traffic_level or derive_traffic_level(payload.flow_per_minute)
 
     is_replay = payload.is_replay or (cam.stream_url and "/uploads" in cam.stream_url)
