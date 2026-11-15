@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from app.config import UPLOAD_DIR
-from app.database import Base, engine, SessionLocal
+from app.database import initialize_schema, SessionLocal
 from app.camera_service import initialize_camera_database
 from app.health_monitor import start_staleness_monitor
 from app.routers import cameras, measurements, alerts
@@ -25,7 +25,7 @@ logging.getLogger("uvicorn.access").addFilter(QuietPollingFilter())
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    initialize_schema()
     db = SessionLocal()
     initialize_camera_database(db)
     db.close()
