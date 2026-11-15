@@ -21,4 +21,4 @@ FLOW_BAND_CLEAR_MAX = DEFAULT_T1
 FLOW_BAND_NORMAL_MAX = DEFAULT_T2
 
 SOURCE_ATTRIBUTION = "Minnesota Department of Transportation (MnDOT) MN511 Traveler Information"
-DATA_RETENTION_POLICY = "Aggregate measurements only (count, flow_vpm, timestamp); raw video/frames and identity data are never stored."
+DATA_RETENTION_POLICY = "Aggregate measurements only (count, flow_vpm, timestamp); approved replay files are retained separately until explicitly purged; identity analysis and GPS collection are excluded."

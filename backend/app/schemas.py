@@ -6,10 +6,13 @@ class MeasurementCreate(BaseModel):
     camera_id: str = Field(..., json_schema_extra={"example": "camera/507320"})
     timestamp: Optional[datetime] = None
     vehicle_count: int = Field(..., ge=0)
-    flow_per_minute: float = Field(..., ge=0.0)
+    flow_per_minute: float = Field(..., ge=0.0, allow_inf_nan=False)
     traffic_level: Optional[str] = Field(None, json_schema_extra={"example": "normal"})
     source_status: str = Field(default="live", json_schema_extra={"example": "live"})
     is_replay: bool = Field(default=False)
+    window_seconds: float = Field(default=60.0, gt=0, allow_inf_nan=False)
+    validity: str = "valid"
+    no_measurement_reason: Optional[str] = None
 
 class CurrentStatusResponse(BaseModel):
     camera_id: str
@@ -27,6 +30,10 @@ class CurrentStatusResponse(BaseModel):
     seconds_since_update: Optional[float] = None
     has_augmented_stream: bool = False
     failover_candidates: List[str] = []
+    is_replay: bool = False
+    recording_time: Optional[datetime] = None
+    calibrated: bool = False
+    no_measurement_reason: Optional[str] = None
 
 class SourceComplianceResponse(BaseModel):
     source_name: str
@@ -63,16 +70,20 @@ class HistoryResponse(BaseModel):
 
 class AlertRuleCreate(BaseModel):
     camera_id: str
-    threshold_vpm: float = Field(..., gt=0.0)
+    session_id: Optional[str] = None
+    threshold_vpm: float = Field(..., gt=0.0, allow_inf_nan=False)
 
 class AlertRuleResponse(BaseModel):
     id: int
+    session_id: Optional[str] = None
     camera_id: str
     threshold_vpm: float
     enabled: bool
 
 class AlertEventResponse(BaseModel):
     id: int
+    rule_id: Optional[int] = None
+    measurement_id: Optional[int] = None
     camera_id: str
     trigger_time: datetime
     flow_at_trigger: float

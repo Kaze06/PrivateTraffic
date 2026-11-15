@@ -3,7 +3,7 @@ uvicorn[standard]
 sqlalchemy
 pydantic
 python-dateutil
-rfdetr
+rfdetr==1.12.1
 supervision
 torch
 torchvision
@@ -12,3 +12,4 @@ numpy
 requests
 pytest
 httpx
+python-multipart
