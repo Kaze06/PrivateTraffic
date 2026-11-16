@@ -57,23 +57,6 @@ def write_shm_frame(camera_id: str, frame_bgr):
         except OSError:
             pass
 
-def letterbox_resize(img: cv2.typing.MatLike if hasattr(cv2, "typing") else any, target_w: int = NATIVE_WIDTH, target_h: int = NATIVE_HEIGHT):
-    """
-    Resizes image to target dimensions while maintaining aspect ratio via letterboxing.
-    Prevents geometric distortion of vehicles (buses/trucks/cars).
-    """
-    h, w = img.shape[:2]
-    if (w, h) == (target_w, target_h):
-        return img
-    scale = min(target_w / float(w), target_h / float(h))
-    nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
-    resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
-    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
-    dx = (target_w - nw) // 2
-    dy = (target_h - nh) // 2
-    canvas[dy:dy + nh, dx:dx + nw] = resized
-    return canvas
-
 class MonotonicPacedReader:
     def __init__(self, stream_url: str, is_local_file: bool = False):
         self.stream_url = stream_url
@@ -101,7 +84,9 @@ class MonotonicPacedReader:
 
                 if ret and frame is not None:
                     fail_count = 0
-                    frame = letterbox_resize(frame, NATIVE_WIDTH, NATIVE_HEIGHT)
+                    h, w = frame.shape[:2]
+                    if (w, h) != (NATIVE_WIDTH, NATIVE_HEIGHT):
+                        frame = cv2.resize(frame, (NATIVE_WIDTH, NATIVE_HEIGHT), interpolation=cv2.INTER_LINEAR)
 
                     try:
                         self.frame_queue.put(frame, timeout=0.1)
@@ -210,6 +195,7 @@ def main():
     reader = MonotonicPacedReader(stream_url, is_local_file=is_local)
 
     unique_tracked_ids = set()
+    track_hit_counts = {}
     window_start_time = time.time()
     last_focus_check_time = time.time()
 
@@ -239,6 +225,7 @@ def main():
                         reader = MonotonicPacedReader(stream_url, is_local_file=is_local)
                         detector.reset()
                         unique_tracked_ids.clear()
+                        track_hit_counts.clear()
                         window_start_time = time.time()
                         next_frame_time = time.monotonic()
                         continue
@@ -250,8 +237,13 @@ def main():
 
                 if detections.tracker_id is not None:
                     for tid in detections.tracker_id:
-                        if int(tid) > 0:
-                            unique_tracked_ids.add(int(tid))
+                        tid_int = int(tid)
+                        if tid_int > 0:
+                            track_hit_counts[tid_int] = track_hit_counts.get(tid_int, 0) + 1
+                            # Require track to be confirmed across at least 4 frames
+                            # to filter out 1-to-3 frame false positive spikes and noise
+                            if track_hit_counts[tid_int] >= 4:
+                                unique_tracked_ids.add(tid_int)
 
                 write_shm_frame(camera_id, annotated_frame)
 
@@ -276,7 +268,14 @@ def main():
                 except Exception as ex:
                     logger.error(f"Failed to submit measurement: {ex}")
 
-                unique_tracked_ids.clear()
+                # Carry over currently visible confirmed tracks to prevent boundary double-counting
+                active_tids = {
+                    int(tid) for tid in detections.tracker_id
+                    if int(tid) > 0 and track_hit_counts.get(int(tid), 0) >= 4
+                } if (detections is not None and detections.tracker_id is not None and len(detections) > 0) else set()
+
+                unique_tracked_ids = set(active_tids)
+                track_hit_counts = {tid: track_hit_counts[tid] for tid in active_tids if tid in track_hit_counts}
                 window_start_time = time.time()
 
             next_frame_time += FRAME_INTERVAL
