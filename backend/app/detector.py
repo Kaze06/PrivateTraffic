@@ -172,7 +172,7 @@ class DirectVehicleTracker:
         return inter_area / np.maximum(union_area, 1e-6)
 
 class VehicleDetector:
-    def __init__(self, confidence_threshold: float = 0.20, device: Optional[str] = None):
+    def __init__(self, confidence_threshold: float = 0.30, device: Optional[str] = None):
         self.confidence_threshold = confidence_threshold
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
