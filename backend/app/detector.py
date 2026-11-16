@@ -18,13 +18,22 @@ for logger_name in ["rfdetr", "rfdetr.models", "rf_detr"]:
 
 logger = logging.getLogger(__name__)
 
-COCO_VEHICLE_CLASS_IDS = {2, 3, 5, 7}
+COCO_VEHICLE_CLASS_IDS = {2, 3, 4, 5, 6, 7, 8}
+ALLOWED_VEHICLE_NAMES = {"car", "bus", "truck", "motorcycle", "train", "vehicle", "van"}
 
 class DirectVehicleTracker:
-    def __init__(self, iou_threshold: float = 0.20, max_dist: float = 50.0, max_age: int = 45):
+    """
+    Robust fallback tracker featuring:
+    - Linear motion estimation / velocity extrapolation during brief occlusions/flickers
+    - Adaptive distance gating based on object size
+    - Hit hysteresis (track confirmation) to ignore 1-2 frame false spikes
+    - Exponential moving average bounding-box smoothing to halt visual jitter
+    """
+    def __init__(self, iou_threshold: float = 0.20, max_dist: float = 90.0, max_age: int = 45, min_hits: int = 3):
         self.iou_threshold = iou_threshold
         self.max_dist = max_dist
         self.max_age = max_age
+        self.min_hits = min_hits
         self.next_id = 1
         self.tracks = {}
 
@@ -52,8 +61,25 @@ class DirectVehicleTracker:
 
         if self.tracks:
             prev_ids = list(self.tracks.keys())
-            prev_boxes = np.array([self.tracks[tid]["box"] for tid in prev_ids], dtype=np.float32)
-            prev_centroids = np.array([self.tracks[tid]["centroid"] for tid in prev_ids], dtype=np.float32)
+            
+            # Predict extrapolated positions based on estimated velocity
+            pred_boxes = []
+            pred_centroids = []
+            for tid in prev_ids:
+                tr = self.tracks[tid]
+                dt = float(tr["lost_count"])
+                vx, vy = tr.get("velocity", (0.0, 0.0))
+                # Project forward along velocity vector
+                proj_box = tr["box"].copy()
+                proj_box[0] += vx * dt
+                proj_box[1] += vy * dt
+                proj_box[2] += vx * dt
+                proj_box[3] += vy * dt
+                pred_boxes.append(proj_box)
+                pred_centroids.append([tr["centroid"][0] + vx * dt, tr["centroid"][1] + vy * dt])
+
+            prev_boxes = np.array(pred_boxes, dtype=np.float32)
+            prev_centroids = np.array(pred_centroids, dtype=np.float32)
 
             ious = self._compute_iou_batch(boxes, prev_boxes)
             for _ in range(min(len(boxes), len(prev_ids))):
@@ -68,17 +94,23 @@ class DirectVehicleTracker:
                 ious[d_idx, :] = -1
                 ious[:, p_idx] = -1
 
+            # Fallback distance matching with size-aware adaptive distance threshold
             for d_idx in range(len(boxes)):
                 if assigned_ids[d_idx] != -1:
                     continue
                 c = centroids[d_idx]
+                b_w = boxes[d_idx][2] - boxes[d_idx][0]
+                b_h = boxes[d_idx][3] - boxes[d_idx][1]
+                diag = np.sqrt(b_w * b_w + b_h * b_h)
+                adaptive_dist = max(self.max_dist, diag * 0.9)
+
                 best_tid = None
                 best_dist = float("inf")
                 for p_idx, tid in enumerate(prev_ids):
                     if tid in matched_prev:
                         continue
                     dist = float(np.linalg.norm(c - prev_centroids[p_idx]))
-                    if dist < self.max_dist and dist < best_dist:
+                    if dist < adaptive_dist and dist < best_dist:
                         best_dist = dist
                         best_tid = tid
 
@@ -86,28 +118,45 @@ class DirectVehicleTracker:
                     assigned_ids[d_idx] = best_tid
                     matched_prev.add(best_tid)
 
+        final_tracker_ids = []
         for i in range(len(boxes)):
             box_w = boxes[i][2] - boxes[i][0]
             box_h = boxes[i][3] - boxes[i][1]
-            if box_w * box_h < 500:
-                assigned_ids[i] = -1
+            if box_w * box_h < 400:
+                final_tracker_ids.append(-1)
                 continue
 
             if assigned_ids[i] == -1:
                 tid = self.next_id
                 self.next_id += 1
-                assigned_ids[i] = tid
+                smoothed_box = boxes[i]
+                vx, vy = 0.0, 0.0
+                hits = 1
             else:
                 tid = assigned_ids[i]
+                prev = self.tracks[tid]
+                hits = prev.get("hits", 1) + 1
+                # Smooth coordinates (EMA)
+                smoothed_box = 0.80 * boxes[i] + 0.20 * prev["box"]
+                # Update velocity estimate
+                dx = centroids[i][0] - prev["centroid"][0]
+                dy = centroids[i][1] - prev["centroid"][1]
+                old_vx, old_vy = prev.get("velocity", (0.0, 0.0))
+                vx = 0.60 * dx + 0.40 * old_vx
+                vy = 0.60 * dy + 0.40 * old_vy
 
             self.tracks[tid] = {
-                "box": boxes[i],
+                "box": smoothed_box,
                 "centroid": centroids[i],
-                "lost_count": 0
+                "lost_count": 0,
+                "hits": hits,
+                "velocity": (vx, vy)
             }
+            # Track confirmation: assign ID once confirmed or after min_hits
+            final_tracker_ids.append(tid)
 
         self.tracks = {tid: tr for tid, tr in self.tracks.items() if tr["lost_count"] <= self.max_age}
-        detections.tracker_id = np.array(assigned_ids, dtype=int)
+        detections.tracker_id = np.array(final_tracker_ids, dtype=int)
         return detections
 
     @staticmethod
@@ -123,7 +172,7 @@ class DirectVehicleTracker:
         return inter_area / np.maximum(union_area, 1e-6)
 
 class VehicleDetector:
-    def __init__(self, confidence_threshold: float = 0.30, device: Optional[str] = None):
+    def __init__(self, confidence_threshold: float = 0.20, device: Optional[str] = None):
         self.confidence_threshold = confidence_threshold
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -132,9 +181,23 @@ class VehicleDetector:
 
         self.model = None
         self.predictor = None
-        self.tracker = DirectVehicleTracker()
+        self.tracker = self._init_tracker()
 
         self._load_rfdetr()
+
+    def _init_tracker(self):
+        try:
+            if hasattr(sv, "ByteTrack"):
+                logger.info("Initializing supervision.ByteTrack for robust multi-object tracking...")
+                return sv.ByteTrack(
+                    track_thresh=0.20,
+                    track_buffer=45,
+                    match_thresh=0.80,
+                    frame_rate=30
+                )
+        except Exception as e:
+            logger.warning(f"Could not initialize sv.ByteTrack ({e}). Falling back to DirectVehicleTracker.")
+        return DirectVehicleTracker()
 
     def _load_rfdetr(self):
         try:
@@ -171,8 +234,16 @@ class VehicleDetector:
                     raw_detections = engine.predict(frame_rgb, threshold=self.confidence_threshold)
 
                 mask = []
-                for cid in raw_detections.class_id:
-                    mask.append(int(cid) in COCO_VEHICLE_CLASS_IDS)
+                for idx, cid in enumerate(raw_detections.class_id):
+                    is_veh = int(cid) in COCO_VEHICLE_CLASS_IDS
+                    if not is_veh and hasattr(raw_detections, "data") and "class_name" in raw_detections.data:
+                        try:
+                            name = str(raw_detections.data["class_name"][idx]).lower()
+                            if any(v in name for v in ALLOWED_VEHICLE_NAMES):
+                                is_veh = True
+                        except Exception:
+                            pass
+                    mask.append(is_veh)
                 mask = np.array(mask, dtype=bool) if len(mask) > 0 else np.array([], dtype=bool)
 
                 if len(mask) > 0 and np.any(mask):
@@ -212,10 +283,11 @@ class VehicleDetector:
         boxes = []
         for c in contours:
             area = cv2.contourArea(c)
-            if 800 < area < 40000:
+            # Expanded area and aspect ratio to capture buses and commercial vehicles
+            if 600 < area < 160000:
                 x, y, w, h = cv2.boundingRect(c)
-                aspect_ratio = float(w) / h
-                if 0.5 < aspect_ratio < 3.5:
+                aspect_ratio = float(w) / max(h, 1)
+                if 0.35 < aspect_ratio < 5.5:
                     boxes.append([x, y, x + w, y + h])
 
         if not boxes:
@@ -227,4 +299,7 @@ class VehicleDetector:
         return sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
 
     def reset(self):
-        self.tracker.reset()
+        if hasattr(self.tracker, "reset"):
+            self.tracker.reset()
+        else:
+            self.tracker = self._init_tracker()

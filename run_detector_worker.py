@@ -57,6 +57,23 @@ def write_shm_frame(camera_id: str, frame_bgr):
         except OSError:
             pass
 
+def letterbox_resize(img: cv2.typing.MatLike if hasattr(cv2, "typing") else any, target_w: int = NATIVE_WIDTH, target_h: int = NATIVE_HEIGHT):
+    """
+    Resizes image to target dimensions while maintaining aspect ratio via letterboxing.
+    Prevents geometric distortion of vehicles (buses/trucks/cars).
+    """
+    h, w = img.shape[:2]
+    if (w, h) == (target_w, target_h):
+        return img
+    scale = min(target_w / float(w), target_h / float(h))
+    nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+    resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    dx = (target_w - nw) // 2
+    dy = (target_h - nh) // 2
+    canvas[dy:dy + nh, dx:dx + nw] = resized
+    return canvas
+
 class MonotonicPacedReader:
     def __init__(self, stream_url: str, is_local_file: bool = False):
         self.stream_url = stream_url
@@ -84,9 +101,7 @@ class MonotonicPacedReader:
 
                 if ret and frame is not None:
                     fail_count = 0
-                    h, w = frame.shape[:2]
-                    if (w, h) != (NATIVE_WIDTH, NATIVE_HEIGHT):
-                        frame = cv2.resize(frame, (NATIVE_WIDTH, NATIVE_HEIGHT), interpolation=cv2.INTER_LINEAR)
+                    frame = letterbox_resize(frame, NATIVE_WIDTH, NATIVE_HEIGHT)
 
                     try:
                         self.frame_queue.put(frame, timeout=0.1)
