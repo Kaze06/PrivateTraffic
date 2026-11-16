@@ -21,6 +21,9 @@
     "camera_code": "C8351",
     "title": "I-35W: I-94 WB @ Chicago Ave",
     "stream_url": "https://video.dot.state.mn.us/public/C8351.stream/playlist.m3u8",
-    "is_default": false
+    "is_default": false,
+    "calibration_t1": 33,
+    "calibration_t2": 142,
+    "calibration_note": "Provisional user-selected P1-5 calibration, 2026-11-16. C8351 RF-DETR 60s flows: clear candidate 28, normal 37, congested 247 vpm. Local evidence: D:/软件工程/PrivateTraffic_P1-5_姚子严_验证/labeled_windows_candidate.csv. Clear label awaits team review."
   }
 ]

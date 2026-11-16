@@ -82,6 +82,7 @@ def initialize_camera_database(db: Session) -> int:
             if pilot_map[camera_code].get("stream_url"):
                 stream_url = pilot_map[camera_code]["stream_url"]
 
+        calibration = pilot_map.get(camera_code, {})
         cam_record = CameraSourceModel(
             id=cam_id,
             camera_code=camera_code,
@@ -91,7 +92,10 @@ def initialize_camera_database(db: Session) -> int:
             longitude=lng,
             stream_url=stream_url,
             is_pilot=is_pilot,
-            current_status="initializing"
+            current_status="initializing",
+            calibration_t1=calibration.get("calibration_t1"),
+            calibration_t2=calibration.get("calibration_t2"),
+            calibration_note=calibration.get("calibration_note")
         )
         cameras_to_create.append(cam_record)
 
