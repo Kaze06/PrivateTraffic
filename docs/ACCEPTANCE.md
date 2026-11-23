@@ -1,5 +1,7 @@
 # Release acceptance record
 
+Branch update, 2026-11-16: [P1-6 handoff](P1_6_HANDOFF.md) records the current Measurement branch evidence. Permitted-use terms and original recording times were supplied by the user; local normal/peak count comparisons now meet their selected-window targets. C8351 has provisional T1=33/T2=142; the clear candidate label still needs team review. The table below is the earlier integration baseline, not the current state of every branch gate. Live timing, team rehearsal and final integration remain open.
+
 The local software candidate passes synthetic API and browser checks; independent final review is recorded in VALIDATION.md. Real source and user acceptance must remain distinct from synthetic software checks.
 
 | Gate | Evidence required | Owner | Current state |

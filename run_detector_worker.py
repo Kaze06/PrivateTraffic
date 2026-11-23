@@ -32,7 +32,7 @@ FRAME_INTERVAL = 1 / 30
 
 def parse_source_time(value):
     result = datetime.fromisoformat(value) if isinstance(value, str) else value
-    if result is None or result.tzinfo is None or result.utcoffset() is None:
+    if not isinstance(result, datetime) or result.tzinfo is None or result.utcoffset() is None:
         raise ValueError("Source time must include a timezone")
     return result.astimezone(timezone.utc)
 
@@ -322,7 +322,12 @@ class ObservationProcessor:
         if packet.observed_at is None:
             self.invalid(packet.reason or "source_timestamp_unavailable", packet.is_replay)
             return
-        observed = parse_source_time(packet.observed_at)
+        try:
+            observed = parse_source_time(packet.observed_at)
+        except ValueError:
+            self.invalid("source_timestamp_unavailable", packet.is_replay)
+            return
+        packet.observed_at = observed
         if not packet.is_replay and not 0 <= (datetime.now(timezone.utc) - observed).total_seconds() <= 60:
             self.invalid("source_observation_not_fresh", False)
             return

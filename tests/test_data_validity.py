@@ -296,8 +296,8 @@ def test_purge_rejects_late_replay_reports_without_restoring_replay_mode(api, mo
 
 
 def test_cli_worker_stops_when_replay_is_purged_during_active_read(api, monkeypatch, tmp_path):
-    import httpx
     import itertools
+    import requests
     client, sessions, _ = attach_cameras(api, monkeypatch, tmp_path)
     with sessions() as db:
         camera = db.get(CameraSourceModel, "test")
@@ -314,6 +314,12 @@ def test_cli_worker_stops_when_replay_is_purged_during_active_read(api, monkeypa
             response = client.post(url, **kwargs)
             if url.endswith("/api/measurements"):
                 measurement_codes.append(response.status_code)
+                # Use the worker's HTTP exception type, independent of TestClient's backend.
+                worker_response = requests.Response()
+                worker_response.status_code = response.status_code
+                worker_response.reason = response.reason_phrase
+                worker_response.url = url
+                return worker_response
             return response
         def close(self):
             pass
@@ -327,7 +333,7 @@ def test_cli_worker_stops_when_replay_is_purged_during_active_read(api, monkeypa
             return None
         def stop(self):
             self.stopped = True
-    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=Session, RequestException=httpx.HTTPError))
+    monkeypatch.setattr(requests, "Session", Session)
     monkeypatch.setattr(sys, "argv", ["worker", "--source", str(clip), "--recording-time", "2020-01-01T00:00:00Z"])
     monkeypatch.setattr(worker, "get_default_camera", lambda session: {"id": "test", "camera_code": "TEST"})
     monkeypatch.setattr(worker, "VehicleDetector", lambda: SimpleNamespace(reset=lambda: None))

@@ -58,6 +58,8 @@ class DirectVehicleTracker:
             return detections
 
         boxes = detections.xyxy
+        areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        eligible = areas >= 500
         centroids = np.column_stack([
             (boxes[:, 0] + boxes[:, 2]) / 2.0,
             (boxes[:, 1] + boxes[:, 3]) / 2.0
@@ -72,6 +74,7 @@ class DirectVehicleTracker:
             prev_centroids = np.array([self.tracks[tid]["centroid"] for tid in prev_ids], dtype=np.float32)
 
             ious = self._compute_iou_batch(boxes, prev_boxes)
+            ious[~eligible, :] = -1
             for _ in range(min(len(boxes), len(prev_ids))):
                 max_idx = np.unravel_index(np.argmax(ious), ious.shape)
                 d_idx, p_idx = max_idx
@@ -85,7 +88,7 @@ class DirectVehicleTracker:
                 ious[:, p_idx] = -1
 
             for d_idx in range(len(boxes)):
-                if assigned_ids[d_idx] != -1:
+                if not eligible[d_idx] or assigned_ids[d_idx] != -1:
                     continue
                 c = centroids[d_idx]
                 best_tid = None
@@ -103,9 +106,7 @@ class DirectVehicleTracker:
                     matched_prev.add(best_tid)
 
         for i in range(len(boxes)):
-            box_w = boxes[i][2] - boxes[i][0]
-            box_h = boxes[i][3] - boxes[i][1]
-            if box_w * box_h < 500:
+            if not eligible[i]:
                 assigned_ids[i] = -1
                 continue
 
