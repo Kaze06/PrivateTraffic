@@ -1,5 +1,9 @@
 # Integration and review evidence
 
+## Measurement and tracking integration (2026-11-23)
+
+The integration retains the measurement branch's default tracker and source-time worker. The offline evaluator exposes the adaptive tracker for same-recording comparison. Default `python -m pytest -q` now covers both test directories: 148 passed, 13 dependency deprecation warnings. The new regression covers single-frame suppression, reacquisition after a missed frame, small-box rejection and counting the same visible track in separate windows. The original labeled recordings were unavailable in this checkout, so no comparative accuracy result was obtained and the dashboard default was not switched.
+
 ## Candidate
 
 The reviewed integration/first-release candidate has been consolidated into main. Compare with 14eacad05dd10515b3e05f8407e843258d652889. The user subsequently authorized main consolidation and publication of the checked stage baseline to origin/main. Functional candidate through fc840dc; subsequent delivery commit adds documentation and demonstration evidence.

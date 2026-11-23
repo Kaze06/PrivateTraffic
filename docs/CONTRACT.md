@@ -1,8 +1,9 @@
 # First-release shared contract
 
-Source: Task2 FR-01..07 and Task3 sections 2.3, 5.4, 5.7 and 6. Local source documents are under D:/Song/M.U.S.T/2609/SE/Task2 and Task3.
+This contract describes the current implementation. Task2 and Task3 are historical design references.
 
 ## Measurements and status
+The RF-DETR worker counts distinct vehicle track IDs in each 60-second source-time window. The Y4M bridge can submit line-crossing counts as replay; use matching counting rules when comparing results. The optional adaptive tracker is only exposed through the offline recording evaluator.
 Existing POST /api/measurements payload names remain: camera_id, timestamp, vehicle_count, flow_per_minute, is_replay, source_status. Timestamp is now required for valid measurement; never substitute receipt time. New window_seconds defaults to 60 and validity defaults to valid; no_measurement_reason optional. Accept only finite, consistent count/flow/window data. First-release window is 60 seconds. Live timestamps must be timezone-aware, increasing, not future and <=60 seconds old. Invalid input cannot advance last valid time or fire an alert. A late/duplicate submission should be rejected rather than overwrite a valid result.
 
 Camera fields: calibration_t1/t2 nullable, calibration_note nullable (a genuine evidence reference), recording_time nullable, permission_reference nullable. Classification requires valid recorded calibration; arbitrary GET t1/t2 overrides do not establish calibration. Existing GET query parameters can remain accepted but cannot bypass it. Status adds is_replay, recording_time, calibrated, no_measurement_reason. Replay mode is explicit, not inferred solely from filename; legacy uploads remain recognized. Frame freshness is based on usable observations, never writing an overlay file.

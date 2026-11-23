@@ -2,7 +2,7 @@
 
 PrivateTraffic is Group 13's Software Engineering course project. The first release follows Task2/Task3: one permitted camera, 60-second vehicle counts and flow, observation time, explicit source state, calibrated road levels, and threshold alerts while the page is open.
 
-Current main milestone: software development baseline. Real-source permission, capture-time evidence, RF-DETR accuracy, road calibration and user acceptance remain open in [the acceptance record](docs/ACCEPTANCE.md).
+Current milestone: integrated development baseline, including Y4M replay and count-evaluation tools. See [the acceptance record](docs/ACCEPTANCE.md) for prior replay evidence and remaining real-source checks.
 
 ## Run the dashboard
 
@@ -52,12 +52,15 @@ The older `python seed_mock_data.py` command now creates only labelled non-live 
 
 ## Data and acceptance rules
 
+- The RF-DETR worker counts distinct vehicle tracks seen within each 60-second source-time window, not line crossings. The separate [Y4M bridge](python_code/README.md) can generate line-crossing measurements for non-live replay; do not compare the two as though they used the same counting rule.
+- The dashboard retains the measurement branch's default tracker. To compare the candidate adaptive tracker on the same permitted recording and window, run `python python_code/recording_auto_counts.py` with the same inputs twice, adding `--adaptive-tracking` on the second run and using a separate `--reports-out` path. This flag does not change live or dashboard behavior.
 - Use source observation time, not upload or processing time. Missing/old/non-increasing live timestamps cannot become current measurements.
 - Failed inference is invalid data, not zero traffic. Replay has an explicit recording time and cannot generate live alerts.
 - A road remains `unable_to_determine` until calibration evidence and T1/T2 have been recorded. User alert thresholds are separate from road classification.
+- C8351 starts with provisional T1=33 and T2=142 in newly seeded databases. Existing values are unchanged on startup; back up the database before explicitly updating it with `python_code/apply_camera_calibration.py`.
 - A first valid alert observation sets the baseline. Only a below-to-at/above crossing creates an event; sustained high is suppressed.
 - Source permission and retention evidence must be supplied before a live pilot. Uploaded permitted replay files are retained separately and can be purged. GPS and identity analysis are excluded.
-- Counting targets are <=10% normal / <=15% peak error, live freshness <=60 seconds, visible eligible alert <=30 seconds. Real samples and timing records are still required.
+- Prior evaluation targets are <=10% normal / <=15% peak count error, live freshness <=60 seconds and visible eligible alert <=30 seconds. Keep prior recording results tied to the tracker and windows that produced them; assess live performance separately.
 
 See [shared contract](docs/CONTRACT.md) and [task record](docs/TASKS.md). Historical charts, notifications after page close and simultaneous camera monitoring are deferred.
 
@@ -66,6 +69,8 @@ See [shared contract](docs/CONTRACT.md) and [task record](docs/TASKS.md). Histor
 ```powershell
 .venv/Scripts/python -m pytest -q
 ```
+
+The default run covers both `tests` and `python_code/tests`, including MP4 transcoding for Y4M replay. Install the root `requirements.txt` first; tests do not require RF-DETR weights.
 
 With Playwright and its Chromium browser installed, run `node tools/check-browser.cjs` while the demo is running. `PLAYWRIGHT_MODULE` can point to an existing Playwright installation.
 

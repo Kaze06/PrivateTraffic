@@ -16,3 +16,6 @@ python-multipart
 
 # Segment-aligned HLS decoding (supports Python 3.10+)
 av==16.1.0
+
+# Y4M replay bridge and its integration tests
+imageio-ffmpeg>=0.8.1,<1

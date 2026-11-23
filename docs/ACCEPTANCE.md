@@ -1,17 +1,15 @@
 # Release acceptance record
 
-Branch update, 2026-11-16: [P1-6 handoff](P1_6_HANDOFF.md) records the current Measurement branch evidence. Permitted-use terms and original recording times were supplied by the user; local normal/peak count comparisons now meet their selected-window targets. C8351 has provisional T1=33/T2=142; the clear candidate label still needs team review. The table below is the earlier integration baseline, not the current state of every branch gate. Live timing, team rehearsal and final integration remain open.
-
-The local software candidate passes synthetic API and browser checks; independent final review is recorded in VALIDATION.md. Real source and user acceptance must remain distinct from synthetic software checks.
+[P1-6 handoff](P1_6_HANDOFF.md) records the measurement branch's replay evidence. The integrated dashboard keeps that branch's default tracker; the adaptive tracker is an opt-in offline comparison and has not been evaluated on those recordings. Treat the historical targets below as evaluation references, separate from software integration.
 
 | Gate | Evidence required | Owner | Current state |
 |---|---|---|---|
-| Source permission | Access, reuse, video retention and aggregate retention permission reference | Chen Jiajun / source owner | Pending external evidence |
+| Source permission | Access, reuse, video retention and aggregate retention permission reference | Chen Jiajun / source owner | Replay-use terms recorded in the handoff; selected live use still needs source evidence |
 | Observation time | Authoritative source timestamp path for chosen feed; UTC display | Data implementation + source owner | Four configured playlists probed: no PROGRAM-DATE-TIME; chosen source needs an authoritative UTC path (SOURCE_TIMING.md) |
-| Count accuracy | Manual and automatic counts over matching 60-second normal/peak windows, error formula and sample identity | Yao Ziyan | Pending permitted samples and manual counts |
-| Road calibration | T1/T2 and supporting selected-road samples, interpretation review | Yao Ziyan | Pending; UI must show unable_to_determine |
+| Count accuracy | Manual and automatic counts over matching 60-second normal/peak windows, error formula and sample identity | Yao Ziyan | Prior handoff records selected-window targets met; no new clip comparison or adaptive-tracker accuracy result |
+| Road calibration | T1/T2 and supporting selected-road samples, interpretation review | Yao Ziyan | C8351 provisional T1=33/T2=142; clear label and additional samples need review |
 | Freshness and alerts | Source-to-display and crossing-to-alert timings on actual pilot | Song Zian | Synthetic behavior tests only until live pilot exists |
-| Replay | Permission, original recording time, not-live label and no live alerts | Chen Jiajun | Replay API/worker setup and browser mode checks passed; permitted clip pending |
+| Replay | Permission, original recording time, not-live label and no live alerts | Chen Jiajun | Handoff records permitted clips and original recording times; replay API and prior browser checks cover mode and alert isolation |
 | Phone usability | Three users complete road/state/threshold task on phone/laptop | Team | Browser layout check does not substitute user study |
 | Retention | Aggregate and replay cleanup by end of evaluation | Team | Purge workflow and retention date to record |
 

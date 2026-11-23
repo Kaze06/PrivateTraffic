@@ -36,10 +36,12 @@ def predict_vehicles(engine, frame_rgb, threshold):
 
 
 class DirectVehicleTracker:
-    def __init__(self, iou_threshold: float = 0.20, max_dist: float = 50.0, max_age: int = 45):
+    def __init__(self, iou_threshold: float = 0.20, max_dist: float = 50.0, max_age: int = 45,
+                 *, adaptive: bool = False):
         self.iou_threshold = iou_threshold
         self.max_dist = max_dist
         self.max_age = max_age
+        self.adaptive = adaptive
         self.next_id = 1
         self.tracks = {}
 
@@ -97,7 +99,10 @@ class DirectVehicleTracker:
                     if tid in matched_prev:
                         continue
                     dist = float(np.linalg.norm(c - prev_centroids[p_idx]))
-                    if dist < self.max_dist and dist < best_dist:
+                    limit = self.max_dist
+                    if self.adaptive:
+                        limit += 3.0 * min(self.tracks[tid]["lost_count"], 10)
+                    if dist < limit and dist < best_dist:
                         best_dist = dist
                         best_tid = tid
 
@@ -105,6 +110,7 @@ class DirectVehicleTracker:
                     assigned_ids[d_idx] = best_tid
                     matched_prev.add(best_tid)
 
+        confirmed_ids = [-1] * len(boxes)
         for i in range(len(boxes)):
             if not eligible[i]:
                 assigned_ids[i] = -1
@@ -117,14 +123,23 @@ class DirectVehicleTracker:
             else:
                 tid = assigned_ids[i]
 
+            previous = self.tracks.get(tid)
+            hits = previous["hits"] + 1 if previous is not None else 1
+            box = boxes[i]
+            if self.adaptive and previous is not None:
+                box = 0.80 * box + 0.20 * previous["box"]
             self.tracks[tid] = {
-                "box": boxes[i],
+                "box": box,
                 "centroid": centroids[i],
-                "lost_count": 0
+                "lost_count": 0,
+                "hits": hits,
             }
+            # An adaptive track may confirm after a short detection gap.
+            if not self.adaptive or hits >= 2:
+                confirmed_ids[i] = tid
 
         self.tracks = {tid: tr for tid, tr in self.tracks.items() if tr["lost_count"] <= self.max_age}
-        detections.tracker_id = np.array(assigned_ids, dtype=int)
+        detections.tracker_id = np.array(confirmed_ids, dtype=int)
         return detections
 
     @staticmethod
@@ -141,7 +156,8 @@ class DirectVehicleTracker:
         return inter_area / np.maximum(union_area, 1e-6)
 
 class VehicleDetector:
-    def __init__(self, confidence_threshold: float = 0.30, device: Optional[str] = None):
+    def __init__(self, confidence_threshold: float = 0.30, device: Optional[str] = None,
+                 *, adaptive_tracking: bool = False):
         import torch
         self.confidence_threshold = confidence_threshold
         if device is None:
@@ -151,7 +167,8 @@ class VehicleDetector:
 
         self.model = None
         self.predictor = None
-        self.tracker = DirectVehicleTracker()
+        self.tracker = (DirectVehicleTracker(0.25, 75.0, 60, adaptive=True)
+                        if adaptive_tracking else DirectVehicleTracker())
 
         self._load_rfdetr()
 

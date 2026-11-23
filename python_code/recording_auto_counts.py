@@ -27,7 +27,7 @@ def _recording_start(value):
 
 
 def count_recording(video_path, camera_id, recording_time, repo_path, reports_path,
-                    *, detector=None, start_seconds=0.0, max_windows=1):
+                    *, detector=None, start_seconds=0.0, max_windows=1, adaptive_tracking=False):
     """Write source-time replay measurements using the product SourceWindow."""
     started_at = _recording_start(recording_time)
     if not isinstance(camera_id, str) or not camera_id.strip():
@@ -53,7 +53,7 @@ def count_recording(video_path, camera_id, recording_time, repo_path, reports_pa
     from app.detector import InferenceUnavailable, VehicleDetector
     import av
 
-    detector = detector if detector is not None else VehicleDetector()
+    detector = detector if detector is not None else VehicleDetector(adaptive_tracking=adaptive_tracking)
     if detector is None or (isinstance(detector, VehicleDetector) and detector.model is None):
         raise RecordingCountError("RF-DETR model unavailable")
     window = SourceWindow()
@@ -113,11 +113,14 @@ def main():
     parser.add_argument("--reports-out", required=True, type=Path)
     parser.add_argument("--start-seconds", type=float, default=0.0)
     parser.add_argument("--max-windows", type=int, default=1)
+    parser.add_argument("--adaptive-tracking", action="store_true",
+                        help="Try the candidate tracker instead of the dashboard's default tracker")
     args = parser.parse_args()
     try:
         reports = count_recording(args.video, args.camera_id, args.recording_time,
                                   args.repo, args.reports_out,
-                                  start_seconds=args.start_seconds, max_windows=args.max_windows)
+                                  start_seconds=args.start_seconds, max_windows=args.max_windows,
+                                  adaptive_tracking=args.adaptive_tracking)
     except (RecordingCountError, OSError) as exc:
         parser.exit(1, f"Recording count error: {exc}\n")
     print(json.dumps({"reports": len(reports), "output": str(args.reports_out)}, ensure_ascii=False))
