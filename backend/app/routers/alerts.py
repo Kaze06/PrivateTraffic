@@ -85,11 +85,24 @@ def evaluate_threshold_crossing(db: Session, camera_id: str, flow_vpm: float,
         valid = valid and camera is not None and camera.current_status in ("live", "live_fresh")
         if valid:
             age = (now - _utc(measurement.timestamp)).total_seconds() if measurement.timestamp else -1
+            if measurement.timestamp_basis == "source_observation":
+                measurement_rate_valid = (measurement.window_seconds == 60
+                                           and measurement.flow_per_minute == measurement.vehicle_count)
+            elif measurement.timestamp_basis == "system_received":
+                measurement_rate_valid = (0 < measurement.window_seconds <= 60 and math.isclose(
+                    measurement.flow_per_minute,
+                    measurement.vehicle_count * 60 / measurement.window_seconds,
+                    rel_tol=1e-6, abs_tol=1e-6,
+                ))
+            else:
+                measurement_rate_valid = False
             valid = (measurement.camera_id == camera_id and measurement.validity == "valid"
                      and not measurement.is_replay and measurement.source_status in ("live", "live_fresh")
                      and 0 <= age <= 60 and math.isfinite(flow_vpm)
-                     and measurement.flow_per_minute == flow_vpm and measurement.window_seconds == 60
-                     and measurement.vehicle_count == flow_vpm and flow_vpm >= 0)
+                     and measurement_rate_valid
+                     and math.isclose(measurement.flow_per_minute, flow_vpm,
+                                      rel_tol=1e-6, abs_tol=1e-6)
+                     and flow_vpm >= 0)
             if measurement_time is not None:
                 valid = valid and _utc(measurement_time) == _utc(measurement.timestamp)
             latest = db.query(TrafficMeasurementModel).filter_by(camera_id=camera_id).order_by(
@@ -102,7 +115,8 @@ def evaluate_threshold_crossing(db: Session, camera_id: str, flow_vpm: float,
                 TrafficMeasurementModel.id < measurement.id,
             ).order_by(TrafficMeasurementModel.id.desc()).first()
         continuous = bool(previous and previous.timestamp and previous.validity == "valid"
-                          and not previous.is_replay and previous.source_status in ("live", "live_fresh"))
+                          and not previous.is_replay and previous.source_status in ("live", "live_fresh")
+                          and previous.timestamp_basis == measurement.timestamp_basis)
         if continuous:
             source_gap = (_utc(measurement.timestamp) - _utc(previous.timestamp)).total_seconds()
             continuous = 0 < source_gap <= measurement.window_seconds + SOURCE_WINDOW_JITTER_SECONDS

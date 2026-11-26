@@ -32,6 +32,7 @@ def initialize_schema(bind=engine):
             "window_seconds": "FLOAT NOT NULL DEFAULT 60",
             "validity": "VARCHAR NOT NULL DEFAULT 'valid'",
             "no_measurement_reason": "VARCHAR",
+            "timestamp_basis": "VARCHAR NOT NULL DEFAULT 'source_observation'",
         },
         "alert_rules": {
             "session_id": "VARCHAR", "last_seen_at": "DATETIME",

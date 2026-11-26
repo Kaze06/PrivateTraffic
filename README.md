@@ -1,6 +1,6 @@
 # PrivateTraffic
 
-PrivateTraffic is Group 13's Software Engineering course project. The first release follows Task2/Task3: one permitted camera, 60-second vehicle counts and flow, observation time, explicit source state, calibrated road levels, and threshold alerts while the page is open.
+PrivateTraffic is Group 13's Software Engineering course project. The first release follows Task2/Task3: one permitted camera, rolling counts over up to 60 seconds, a labelled time basis, explicit source state, calibrated road levels, and threshold alerts while the page is open.
 
 Current milestone: integrated development baseline, including Y4M replay and count-evaluation tools. See [the acceptance record](docs/ACCEPTANCE.md) for prior replay evidence and remaining real-source checks.
 
@@ -28,7 +28,16 @@ python run_detector_worker.py --source clip.mp4 --recording-time "2020-01-01T00:
 
 The worker registers replay metadata with the selected pilot camera before processing, and uploads a copy of a local clip. For a permitted remote HTTP(S) recording, also pass `--replay`. Purging replay files restores the original source URL. Set `API_BASE_URL` if the API is not at http://127.0.0.1:8000.
 
-For live input, use `--timestamp-adapter module:function`. The callable receives `(stream_url, frame_index, media_position_ms)` and returns the authoritative timezone-aware source observation time, or `None` when unavailable. The four configured MnDOT playlists were checked on 2026-11-15 and contain no absolute PDT anchor; their verified live timing remains unavailable. OpenCV receipt time alone does not establish capture time; without that evidence the worker reports unavailable measurements. RF-DETR inference and real source throughput remain unverified in the current local acceptance environment.
+In source-observation mode, use `--timestamp-adapter module:function`. The callable receives `(stream_url, frame_index, media_position_ms)` and returns the timezone-aware source observation time, or `None` when unavailable. The four configured MnDOT playlists were checked on 2026-11-15 and contain no absolute PDT anchor. The receipt-time mode below supports these feeds with a separately labelled local frame-receipt time. RF-DETR inference and real source throughput remain to be measured on the selected pilot.
+
+For a feed without frame capture timestamps, start a separate worker in the system-received-time mode:
+
+```powershell
+$env:API_BASE_URL = "http://127.0.0.1:8000"
+python run_detector_worker.py --receipt-time
+```
+
+The worker uses the selected frame's local receipt time, publishes a rolling 60-second distinct-track count every 5 seconds, and enables the existing page-session alert rules. During the first minute it normalizes the available partial window to vehicles per minute. The dashboard labels these measurements with their time basis. This mode is for live operational use when source capture time is unavailable; its video delivery delay is unknown. Run one worker process, keep the dashboard open for the selected camera, and ensure RF-DETR weights and runtime dependencies are installed.
 
 For an allowed **media playlist** whose provider confirms that each segment's PROGRAM-DATE-TIME is the first displayed video's observation time, use:
 
@@ -54,7 +63,7 @@ The older `python seed_mock_data.py` command now creates only labelled non-live 
 
 - The RF-DETR worker counts distinct vehicle tracks seen within each 60-second source-time window, not line crossings. The separate [Y4M bridge](python_code/README.md) can generate line-crossing measurements for non-live replay; do not compare the two as though they used the same counting rule.
 - The dashboard retains the measurement branch's default tracker. To compare the candidate adaptive tracker on the same permitted recording and window, run `python python_code/recording_auto_counts.py` with the same inputs twice, adding `--adaptive-tracking` on the second run and using a separate `--reports-out` path. This flag does not change live or dashboard behavior.
-- Use source observation time, not upload or processing time. Missing/old/non-increasing live timestamps cannot become current measurements.
+- Source-observation mode uses source observation time. `--receipt-time` is the explicit alternative for sources without capture timestamps and stores worker frame-receipt time as a separate basis.
 - Failed inference is invalid data, not zero traffic. Replay has an explicit recording time and cannot generate live alerts.
 - A road remains `unable_to_determine` until calibration evidence and T1/T2 have been recorded. User alert thresholds are separate from road classification.
 - C8351 starts with provisional T1=33 and T2=142 in newly seeded databases. Existing values are unchanged on startup; back up the database before explicitly updating it with `python_code/apply_camera_calibration.py`.

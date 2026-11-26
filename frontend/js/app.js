@@ -331,6 +331,14 @@ function renderStatusData(data) {
 
   const measTimeEl = document.getElementById("val-updated");
   measTimeEl.innerText = `Measurement Time: ${formatIso(data.measurement_time)}`;
+  const timeBasisNote = document.getElementById("timestamp-basis-note");
+  const usesReceiptTime = data.timestamp_basis === "system_received";
+  document.getElementById("count-label").textContent = usesReceiptTime && data.measurement_window_seconds
+    ? `Count (last ${Math.round(data.measurement_window_seconds)}s)` : "Count";
+  timeBasisNote.hidden = !usesReceiptTime;
+  timeBasisNote.textContent = usesReceiptTime
+    ? "Time basis: system received the video frame; source video delay is unknown."
+    : "";
   if (data.status === "stale") {
     measTimeEl.classList.add("stale-warning");
   } else {

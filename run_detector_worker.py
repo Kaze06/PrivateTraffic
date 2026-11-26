@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Source-time vehicle windows. OpenCV alone cannot certify live capture time.
+"""Live vehicle windows with source-observation or explicit receipt time.
 
-For a permitted live feed, --timestamp-adapter module:function supplies an aware
-source datetime for (stream_url, frame_index, media_position_ms), or None when
-unavailable. The adapter must use authoritative per-frame source metadata, never
-wall-clock receipt time. Replay uses recording_time + original media position.
+By default, --timestamp-adapter module:function supplies a timezone-aware source
+time for (stream_url, frame_index, media_position_ms). --receipt-time instead
+uses the local UTC time when each frame is read. Replay uses recording_time plus
+the original media position.
 """
 import sys
 import os
@@ -44,16 +44,18 @@ class SourceFrame:
     sequence: object
     is_replay: bool
     reason: str = None
+    timestamp_basis: str = "source_observation"
 
 
 class MonotonicPacedReader:
     def __init__(self, stream_url, is_local_file=False, *, is_replay=False,
-                 recording_time=None, timestamp_adapter=None):
+                 recording_time=None, timestamp_adapter=None, receipt_time=False):
         self.stream_url = stream_url
         self.is_local_file = is_local_file
         self.is_replay = is_replay or is_local_file
         self.recording_time = parse_source_time(recording_time) if recording_time else None
         self.timestamp_adapter = timestamp_adapter
+        self.receipt_time = receipt_time and not self.is_replay
         self.running = True
         self.ended = False
         self.frame_queue = queue.Queue(maxsize=180 if self.is_replay else 2)
@@ -96,13 +98,16 @@ class MonotonicPacedReader:
                         delay = pace_start + position / 1000 - time.monotonic()
                         if 0 < delay < 5:
                             time.sleep(delay)
+                    elif self.receipt_time:
+                        observed = datetime.now(timezone.utc)
                     elif self.timestamp_adapter:
                         observed = parse_source_time(self.timestamp_adapter(self.stream_url, sequence, position))
                     else:
                         reason = "live_capture_timestamp_unavailable"
                 except Exception:
                     reason = "source_timestamp_unavailable"
-                packet = SourceFrame(frame, observed, sequence, self.is_replay, reason)
+                basis = "system_received" if self.receipt_time else "source_observation"
+                packet = SourceFrame(frame, observed, sequence, self.is_replay, reason, basis)
                 while self.running:
                     try:
                         self.frame_queue.put(packet, timeout=0.1)
@@ -169,11 +174,12 @@ class HLSSegmentReader:
         self.thread.join(timeout=2)
 
 
-def create_source_reader(source, local, replay, recording, adapter, hls_pdt=False):
+def create_source_reader(source, local, replay, recording, adapter, hls_pdt=False, receipt_time=False):
     if hls_pdt and not replay:
         return HLSSegmentReader(source, trust_pdt=True)
     return MonotonicPacedReader(source, local, is_replay=replay,
-                                recording_time=recording, timestamp_adapter=adapter)
+                                recording_time=recording, timestamp_adapter=adapter,
+                                receipt_time=receipt_time)
 
 
 class SourceWindow:
@@ -209,6 +215,47 @@ class SourceWindow:
                       "flow_per_minute": float(len(self.ids)), "window_seconds": 60, "validity": "valid"}
             self.start = observed_at
             self.ids.clear()
+        return result
+
+
+class ReceiptTimeWindow:
+    """Estimate vehicles per minute from distinct tracks in the trailing minute."""
+    def __init__(self, publish_interval=5):
+        self.publish_interval = publish_interval
+        self.reset()
+
+    def reset(self):
+        self.start = None
+        self.last_received = None
+        self.last_emitted = None
+        self.tracks = {}
+
+    def add(self, received_at, tracker_ids):
+        if self.last_received is not None and received_at <= self.last_received:
+            self.reset()
+            raise ValueError("receipt_time_not_increasing")
+        if self.start is None:
+            self.start = received_at
+        self.last_received = received_at
+        self.tracks.update({int(tid): received_at for tid in tracker_ids if int(tid) > 0})
+        cutoff = received_at - timedelta(seconds=60)
+        self.tracks = {tid: seen for tid, seen in self.tracks.items() if seen > cutoff}
+        elapsed = min(60.0, (received_at - self.start).total_seconds())
+        if elapsed < self.publish_interval:
+            return None
+        if self.last_emitted and (received_at - self.last_emitted).total_seconds() < self.publish_interval:
+            return None
+        window_seconds = elapsed
+        vehicle_count = len(self.tracks)
+        result = {
+            "timestamp": received_at.isoformat(),
+            "vehicle_count": vehicle_count,
+            "flow_per_minute": vehicle_count * 60.0 / window_seconds,
+            "window_seconds": window_seconds,
+            "validity": "valid",
+            "timestamp_basis": "system_received",
+        }
+        self.last_emitted = received_at
         return result
 
 
@@ -289,16 +336,18 @@ def configure_cli_replay(source, recording_time, camera, session):
 
 
 class ObservationProcessor:
-    def __init__(self, camera_id, detector, session):
+    def __init__(self, camera_id, detector, session, timestamp_basis="source_observation"):
         self.camera_id, self.detector, self.session = camera_id, detector, session
-        self.window = SourceWindow()
+        self.timestamp_basis = timestamp_basis
+        self.window = ReceiptTimeWindow() if timestamp_basis == "system_received" else SourceWindow()
         self.last_sequence = None
         self.last_invalid = None
         self.last_invalid_at = 0
 
     def submit(self, payload, replay):
         payload.update(camera_id=self.camera_id, is_replay=replay,
-                       source_status="replay_not_live" if replay else "live")
+                       source_status="replay_not_live" if replay else "live",
+                       timestamp_basis=("source_observation" if replay else self.timestamp_basis))
         response = self.session.post(f"{API_BASE_URL}/api/measurements", json=payload, timeout=5)
         response.raise_for_status()
 
@@ -311,7 +360,8 @@ class ObservationProcessor:
             return
         self.submit({"timestamp": observed_at.isoformat() if observed_at else None,
                      "vehicle_count": 0, "flow_per_minute": 0, "window_seconds": 60,
-                     "validity": "invalid", "no_measurement_reason": reason}, replay)
+                     "validity": "invalid", "no_measurement_reason": reason,
+                     "timestamp_basis": "source_observation" if replay else self.timestamp_basis}, replay)
         self.last_invalid, self.last_invalid_at = reason, now
 
     def process(self, packet):
@@ -352,11 +402,14 @@ def main():
     parser.add_argument("--replay", action="store_true", help="Explicitly mark a remote source as replay")
     parser.add_argument("--recording-time", help="Original timezone-aware recording start, required for replay")
     parser.add_argument("--timestamp-adapter", help="Trusted source metadata adapter module:function")
+    parser.add_argument("--receipt-time", action="store_true", help="Use local frame-receipt time for live counts and alerts")
     parser.add_argument("--hls-pdt", action="store_true", help="Decode video-only MPEG-TS media segments with explicit per-segment PDT")
     parser.add_argument("--trust-hls-source-clock", action="store_true", help="Attest PDT denotes the first displayed video sample's UTC observation time")
     args = parser.parse_args()
-    if args.hls_pdt and (not args.trust_hls_source_clock or args.timestamp_adapter or args.replay):
-        parser.error("--hls-pdt requires --trust-hls-source-clock and cannot be combined with replay or a custom adapter")
+    if args.hls_pdt and (not args.trust_hls_source_clock or args.timestamp_adapter or args.receipt_time or args.replay):
+        parser.error("--hls-pdt requires --trust-hls-source-clock and cannot be combined with replay, receipt time or a custom adapter")
+    if args.receipt_time and (args.timestamp_adapter or args.replay):
+        parser.error("--receipt-time cannot be combined with --timestamp-adapter or --replay")
     logging.basicConfig(level=logging.INFO)
     adapter = None
     if args.timestamp_adapter:
@@ -368,6 +421,8 @@ def main():
     registered_replay = None
     if args.source:
         _, local = resolve_stream_url(args.source)
+        if args.receipt_time and local:
+            parser.error("--receipt-time is for live feeds; local video uses recording time")
         if local or args.replay or args.source.startswith("/uploads/"):
             if not args.recording_time:
                 parser.error("Replay --source requires --recording-time with its original timezone-aware recording start")
@@ -404,9 +459,11 @@ def main():
                             reader.stop()
                             clear_frame(camera_id)
                         camera_id = active_id
-                        reader = create_source_reader(source, local, replay, recording, adapter, args.hls_pdt)
+                        receipt_time = args.receipt_time and not replay
+                        reader = create_source_reader(source, local, replay, recording, adapter, args.hls_pdt, receipt_time)
                         detector.reset()
-                        processor = ObservationProcessor(camera_id, detector, session)
+                        processor = ObservationProcessor(camera_id, detector, session,
+                            "system_received" if receipt_time else "source_observation")
                         signature = new_signature
                         last_packet_at = now
             if reader is None:

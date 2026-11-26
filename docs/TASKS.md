@@ -24,3 +24,7 @@ History charts, simultaneous multi-camera monitoring and closed-page notificatio
 ## Main consolidation
 
 The user elected to consolidate the reviewed candidate into local main before further development. This is a development baseline, with the real-source acceptance gates in ACCEPTANCE.md still open. The previous main history is retained, including its reverted C prototype; the Python application is the continuing implementation. Future development starts from this consolidated baseline on isolated branches.
+
+## Receipt-time live mode (2026-11-26)
+
+Implemented on branch `feat/live-receipt-time-counting`, based on `2268ec0`. Run the worker with `--receipt-time` to timestamp live frames when read, publish rolling counts every 5 seconds, and preserve that time basis in API, history, and dashboard. Source-observation and replay windows retain their existing 60-second contract. Full-suite and pilot timing evidence are recorded in `docs/VALIDATION.md` and `docs/ACCEPTANCE.md`.

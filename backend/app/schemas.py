@@ -13,6 +13,7 @@ class MeasurementCreate(BaseModel):
     window_seconds: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     validity: str = "valid"
     no_measurement_reason: Optional[str] = None
+    timestamp_basis: str = "source_observation"
 
 class CurrentStatusResponse(BaseModel):
     camera_id: str
@@ -25,6 +26,8 @@ class CurrentStatusResponse(BaseModel):
     flow_per_minute: Optional[float] = None
     traffic_level: Optional[str] = None
     measurement_time: Optional[datetime] = None
+    timestamp_basis: str = "source_observation"
+    measurement_window_seconds: Optional[float] = None
     last_valid_time: Optional[datetime] = None
     stream_url: Optional[str] = None
     seconds_since_update: Optional[float] = None
@@ -57,6 +60,8 @@ class CameraItem(BaseModel):
 
 class HistoricalPoint(BaseModel):
     timestamp: datetime
+    timestamp_basis: str = "source_observation"
+    window_seconds: float = 60.0
     vehicle_count: int
     flow_per_minute: float
     traffic_level: str

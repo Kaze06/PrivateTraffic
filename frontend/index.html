@@ -72,7 +72,7 @@
 
           <div id="cv-offline-notice" style="display: none;" class="stream-overlay-notice">
             <span>Detection Pipeline Standby</span>
-            <small>Worker is connecting to video stream...</small>
+            <small>Start the detector with --receipt-time to process live video.</small>
           </div>
         </div>
 
@@ -85,7 +85,7 @@
       <div class="metrics-grid">
         <div class="metric-box">
           <div id="val-count" class="metric-val">--</div>
-          <div class="metric-lbl">Count</div>
+          <div id="count-label" class="metric-lbl">Count</div>
         </div>
         <div class="metric-box">
           <div id="val-flow" class="metric-val">--</div>
@@ -100,6 +100,7 @@
       <div class="measurement-note" id="val-updated">
         Measurement Time: Not available
       </div>
+      <div class="measurement-note" id="timestamp-basis-note" hidden></div>
       <div class="measurement-note" id="recording-time" hidden></div>
       <div class="measurement-note" id="source-reason"></div>
       <div class="measurement-note" id="val-last-valid">

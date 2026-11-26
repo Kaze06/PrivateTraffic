@@ -36,6 +36,7 @@ class TrafficMeasurementModel(Base):
     window_seconds = Column(Float, default=60.0, nullable=False)
     validity = Column(String, default="valid", nullable=False)
     no_measurement_reason = Column(String, nullable=True)
+    timestamp_basis = Column(String, nullable=False, default="source_observation")
 
 Index("ix_camera_timestamp", TrafficMeasurementModel.camera_id, TrafficMeasurementModel.timestamp)
 

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import math
 from sqlalchemy import null
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -19,13 +20,23 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Unknown camera source ID")
     if payload.validity not in {"valid", "invalid"}:
         raise HTTPException(status_code=422, detail="validity must be valid or invalid")
-    if payload.window_seconds != 60 or payload.flow_per_minute != payload.vehicle_count:
-        raise HTTPException(status_code=422, detail="First release requires a 60-second window with flow equal to its vehicle count")
+    if payload.timestamp_basis not in {"source_observation", "system_received"}:
+        raise HTTPException(status_code=422, detail="Unknown timestamp_basis")
+    if payload.timestamp_basis == "source_observation":
+        if payload.window_seconds != 60 or payload.flow_per_minute != payload.vehicle_count:
+            raise HTTPException(status_code=422, detail="Source-time measurements require a 60-second window with flow equal to its vehicle count")
+    elif not 0 < payload.window_seconds <= 60 or not math.isclose(
+        payload.flow_per_minute, payload.vehicle_count * 60 / payload.window_seconds,
+        rel_tol=1e-6, abs_tol=1e-6,
+    ):
+        raise HTTPException(status_code=422, detail="Received-time flow must match the vehicle count normalized to its measurement window")
 
     configured_replay = is_replay_source(cam)
     if payload.is_replay and not configured_replay and cam.recording_time is None:
         raise HTTPException(status_code=409, detail="Replay configuration is not active; this report belongs to a retired source")
     replay = bool(payload.is_replay or configured_replay)
+    if replay and payload.timestamp_basis != "source_observation":
+        raise HTTPException(status_code=422, detail="Replay measurements use recording time")
     valid = payload.validity == "valid"
     ts = payload.timestamp
     if ts is not None:
@@ -64,6 +75,7 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
             TrafficMeasurementModel.id.desc()).first()
         interrupted = previous_report is not None and (
             previous_report.validity != "valid" or previous_report.is_replay
+            or previous_report.timestamp_basis != payload.timestamp_basis
             or not windows_are_contiguous(previous_report.timestamp, ts, payload.window_seconds)
         )
         if interrupted:
@@ -73,8 +85,9 @@ def submit_measurement(payload: MeasurementCreate, db: Session = Depends(get_db)
     measurement = TrafficMeasurementModel(
         camera_id=cam.id, timestamp=ts if ts is not None else null(),
         vehicle_count=payload.vehicle_count, flow_per_minute=payload.flow_per_minute,
-        window_seconds=60, validity=payload.validity,
+        window_seconds=payload.window_seconds, validity=payload.validity,
         no_measurement_reason=payload.no_measurement_reason if not valid else None,
+        timestamp_basis=payload.timestamp_basis,
         traffic_level=level, source_status=source_status, is_replay=replay,
     )
     db.add(measurement)
@@ -119,6 +132,8 @@ def get_history(
         records=[
             HistoricalPoint(
                 timestamp=r.timestamp,
+                timestamp_basis=r.timestamp_basis,
+                window_seconds=r.window_seconds,
                 vehicle_count=r.vehicle_count,
                 flow_per_minute=r.flow_per_minute,
                 traffic_level=r.traffic_level,

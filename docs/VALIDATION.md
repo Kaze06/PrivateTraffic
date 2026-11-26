@@ -1,5 +1,11 @@
 # Integration and review evidence
 
+## Receipt-time live mode (2026-11-26)
+
+Branch `feat/live-receipt-time-counting` adds an opt-in live worker mode that timestamps frames when read, maintains a trailing 60-second distinct-track set, and submits normalized flow every 5 seconds. Source-observation and replay modes retain their 60-second count contract. The selected time basis is persisted and shown on the dashboard.
+
+The full suite passes with 154 tests and 13 existing Starlette/httpx deprecation warnings. Browser verification at desktop and 390px mobile widths confirmed the system-received label, count-window label, detection-worker standby instruction, no horizontal overflow and no page errors. The screenshots use one synthetic API measurement in the isolated preview database: `artifacts/receipt-time-desktop.png` and `artifacts/receipt-time-mobile.png`. Actual pilot count accuracy, feed-to-display delay and threshold-to-alert timing remain to be measured.
+
 ## Measurement and tracking integration (2026-11-23)
 
 The integration retains the measurement branch's default tracker and source-time worker. The offline evaluator exposes the adaptive tracker for same-recording comparison. Default `python -m pytest -q` now covers both test directories: 148 passed, 13 dependency deprecation warnings. The new regression covers single-frame suppression, reacquisition after a missed frame, small-box rejection and counting the same visible track in separate windows. The original labeled recordings were unavailable in this checkout, so no comparative accuracy result was obtained and the dashboard default was not switched.

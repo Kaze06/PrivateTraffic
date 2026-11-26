@@ -296,6 +296,8 @@ def get_camera_current_status(
         flow_per_minute=latest_meas.flow_per_minute if usable else None,
         traffic_level=level,
         measurement_time=utc_time(latest_meas.timestamp) if same_mode and latest_meas.timestamp else None,
+        timestamp_basis=latest_meas.timestamp_basis if same_mode and latest_meas else "source_observation",
+        measurement_window_seconds=latest_meas.window_seconds if usable else None,
         last_valid_time=utc_time(cam.last_measurement_time) if cam.last_measurement_time else None,
         stream_url=cam.stream_url,
         seconds_since_update=seconds_since,
