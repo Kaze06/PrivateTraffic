@@ -9,6 +9,7 @@ let currentStatusTimer = null;
 let hlsInstance = null;
 let augmentedWs = null;
 let currentVideoMode = "raw";
+let detectionStatusTimer = null;
 
 function getFollowedList() {
   try {
@@ -356,6 +357,62 @@ function renderStatusData(data) {
   }
 }
 
+function setDetectionNotice(title, detail) {
+  document.getElementById("cv-notice-title").textContent = title;
+  document.getElementById("cv-notice-detail").textContent = detail;
+  document.getElementById("cv-offline-notice").style.display = "flex";
+}
+
+async function updateDetectionStatus(cameraId) {
+  if (currentVideoMode !== "augmented" || cameraId !== currentCameraId) return;
+  try {
+    const response = await fetch(`/api/detection/status?camera_id=${encodeURIComponent(cameraId)}`);
+    if (!response.ok) throw new Error("Detection status unavailable");
+    const status = await response.json();
+    if (cameraId !== currentCameraId || currentVideoMode !== "augmented") return;
+    if (status.state === "starting") {
+      setDetectionNotice("Starting vehicle detection", "Loading the detector and connecting to the selected camera.");
+    } else if (status.state === "waiting_for_frame") {
+      setDetectionNotice("No detection frames received", "Check that the camera is online and the detector can load.");
+    } else if (status.state === "failed") {
+      setDetectionNotice("Vehicle detection stopped", `The detector exited with code ${status.exit_code}. Click Detection view to try again.`);
+    } else if (status.state === "idle") {
+      setDetectionNotice("Starting vehicle detection", "Connecting to the selected live camera.");
+    }
+  } catch (error) {
+    setDetectionNotice("Detection status unavailable", "The dashboard could not reach the detection service.");
+  }
+}
+
+async function startDetection(cameraId) {
+  setDetectionNotice("Starting vehicle detection", "Loading the detector and connecting to the selected camera.");
+  let started = false;
+  try {
+    const response = await fetch("/api/detection/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ camera_id: cameraId })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Could not start vehicle detection.");
+    started = true;
+    await updateDetectionStatus(cameraId);
+  } catch (error) {
+    setDetectionNotice("Vehicle detection could not start", error.message);
+  }
+  if (!started || cameraId !== currentCameraId || currentVideoMode !== "augmented") return;
+  if (detectionStatusTimer) clearInterval(detectionStatusTimer);
+  detectionStatusTimer = setInterval(() => updateDetectionStatus(cameraId), 2000);
+}
+
+function stopDetection() {
+  if (detectionStatusTimer) {
+    clearInterval(detectionStatusTimer);
+    detectionStatusTimer = null;
+  }
+  fetch("/api/detection/stop", { method: "POST", keepalive: true }).catch(() => {});
+}
+
 function setupVideoPlayer(cam) {
   const videoEl = document.getElementById("raw-video-player");
   const overlayCanvas = document.getElementById("detection-overlay-canvas");
@@ -369,11 +426,16 @@ function setupVideoPlayer(cam) {
     augmentedWs.close();
     augmentedWs = null;
   }
+  if (detectionStatusTimer) {
+    clearInterval(detectionStatusTimer);
+    detectionStatusTimer = null;
+  }
 
   videoEl.pause();
   videoEl.removeAttribute("src");
   videoEl.load();
   if (!cam || !cam.stream_url) {
+    if (currentVideoMode === "augmented") stopDetection();
     document.getElementById("video-display-area").style.display = "none";
     return;
   }
@@ -401,6 +463,7 @@ function setupVideoPlayer(cam) {
     videoEl.pause();
     videoEl.style.display = "none";
     overlayCanvas.style.display = "block";
+    startDetection(cam.id);
 
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${location.host}/api/cameras/${encodeURIComponent(cam.id)}/ws`;
@@ -447,6 +510,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("btn-mode-raw").addEventListener("click", () => {
     currentVideoMode = "raw";
+    stopDetection();
     document.getElementById("btn-mode-raw").classList.add("active");
     document.getElementById("btn-mode-augmented").classList.remove("active");
     const cam = allCameras.find(c => c.id === currentCameraId);
@@ -467,6 +531,12 @@ document.addEventListener("DOMContentLoaded", () => {
       container.requestFullscreen().catch(() => {});
     } else {
       document.exitFullscreen().catch(() => {});
+    }
+  });
+
+  window.addEventListener("pagehide", () => {
+    if (currentVideoMode === "augmented") {
+      navigator.sendBeacon("/api/detection/stop", new Blob());
     }
   });
 

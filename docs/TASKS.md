@@ -28,3 +28,7 @@ The user elected to consolidate the reviewed candidate into local main before fu
 ## Receipt-time live mode (2026-11-26)
 
 Implemented on branch `feat/live-receipt-time-counting`, based on `2268ec0`. Run the worker with `--receipt-time` to timestamp live frames when read, publish rolling counts every 5 seconds, and preserve that time basis in API, history, and dashboard. Source-observation and replay windows retain their existing 60-second contract. Full-suite and pilot timing evidence are recorded in `docs/VALIDATION.md` and `docs/ACCEPTANCE.md`.
+
+## Detection view auto-start (2026-11-26)
+
+Detection view now starts or reuses the backend-managed receipt-time worker, shows its startup/failure state, and stops it when switching to Raw video or when the API shuts down. The worker follows the selected camera through the existing active-focus endpoint. See `docs/VALIDATION.md` for lifecycle test and browser evidence.

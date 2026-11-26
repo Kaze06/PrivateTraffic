@@ -1,10 +1,16 @@
 # Integration and review evidence
 
+## Detection view auto-start (2026-11-26)
+
+Detection view calls the backend lifecycle API, which starts one `--receipt-time` worker, reuses it on repeated starts, follows camera changes through active focus, and stops it on Raw video or API shutdown. API tests cover process reuse, selected-camera focus, live-source validation, running/failed states and stop. Full suite: **157 passed**, with 13 existing Starlette/httpx deprecation warnings.
+
+Desktop and 390px mobile browser checks used mocked detection start/status/stop responses. They confirmed one start on entering Detection view, status feedback, one stop on returning to Raw video, no browser errors and no horizontal overflow. Screenshots: `artifacts/detection-autostart-desktop.png` and `artifacts/detection-autostart-mobile.png`. These checks did not start the detector or connect to a live feed; RF-DETR model loading and pilot camera behavior still need an on-device run.
+
 ## Receipt-time live mode (2026-11-26)
 
 Branch `feat/live-receipt-time-counting` adds an opt-in live worker mode that timestamps frames when read, maintains a trailing 60-second distinct-track set, and submits normalized flow every 5 seconds. Source-observation and replay modes retain their 60-second count contract. The selected time basis is persisted and shown on the dashboard.
 
-The full suite passes with 154 tests and 13 existing Starlette/httpx deprecation warnings. Browser verification at desktop and 390px mobile widths confirmed the system-received label, count-window label, detection-worker standby instruction, no horizontal overflow and no page errors. The screenshots use one synthetic API measurement in the isolated preview database: `artifacts/receipt-time-desktop.png` and `artifacts/receipt-time-mobile.png`. Actual pilot count accuracy, feed-to-display delay and threshold-to-alert timing remain to be measured.
+The original receipt-time browser screenshots use one synthetic API measurement in the isolated preview database: `artifacts/receipt-time-desktop.png` and `artifacts/receipt-time-mobile.png`. Actual pilot count accuracy, feed-to-display delay and threshold-to-alert timing remain to be measured.
 
 ## Measurement and tracking integration (2026-11-23)
 

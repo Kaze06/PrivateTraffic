@@ -14,7 +14,7 @@ python -m venv .venv
 .venv/Scripts/python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000. The API serves the dashboard; the detector is a separate process. The database is updated additively on startup. Existing records are not deleted.
+Open http://127.0.0.1:8000. The API serves the dashboard. Selecting **Detection view** starts the receipt-time detector automatically; switching back to **Raw video** stops it. The database is updated additively on startup. Existing records are not deleted.
 
 The backend can be tested without downloading model weights. RF-DETR is pinned to 1.12.1; inference additionally needs the installed Torch/OpenCV dependencies and model weights. Source access, actual model inference and hardware throughput must be checked on the selected pilot.
 
@@ -30,14 +30,14 @@ The worker registers replay metadata with the selected pilot camera before proce
 
 In source-observation mode, use `--timestamp-adapter module:function`. The callable receives `(stream_url, frame_index, media_position_ms)` and returns the timezone-aware source observation time, or `None` when unavailable. The four configured MnDOT playlists were checked on 2026-11-15 and contain no absolute PDT anchor. The receipt-time mode below supports these feeds with a separately labelled local frame-receipt time. RF-DETR inference and real source throughput remain to be measured on the selected pilot.
 
-For a feed without frame capture timestamps, start a separate worker in the system-received-time mode:
+For a feed without frame capture timestamps, the dashboard starts the worker in system-received-time mode when Detection view is selected. To start it manually instead:
 
 ```powershell
 $env:API_BASE_URL = "http://127.0.0.1:8000"
 python run_detector_worker.py --receipt-time
 ```
 
-The worker uses the selected frame's local receipt time, publishes a rolling 60-second distinct-track count every 5 seconds, and enables the existing page-session alert rules. During the first minute it normalizes the available partial window to vehicles per minute. The dashboard labels these measurements with their time basis. This mode is for live operational use when source capture time is unavailable; its video delivery delay is unknown. Run one worker process, keep the dashboard open for the selected camera, and ensure RF-DETR weights and runtime dependencies are installed.
+The worker uses the selected frame's local receipt time, publishes a rolling 60-second distinct-track count every 5 seconds, and enables the existing page-session alert rules. During the first minute it normalizes the available partial window to vehicles per minute. The dashboard labels these measurements with their time basis. This mode is for live operational use when source capture time is unavailable; its video delivery delay is unknown. Keep the dashboard open for the selected camera, and ensure RF-DETR weights and runtime dependencies are installed. Detection process controls require one Uvicorn worker so the process manager and active-camera selection stay shared.
 
 For an allowed **media playlist** whose provider confirms that each segment's PROGRAM-DATE-TIME is the first displayed video's observation time, use:
 

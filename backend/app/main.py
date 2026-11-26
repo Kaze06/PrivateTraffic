@@ -11,7 +11,8 @@ from app.config import UPLOAD_DIR
 from app.database import initialize_schema, SessionLocal
 from app.camera_service import initialize_camera_database
 from app.health_monitor import start_staleness_monitor
-from app.routers import cameras, measurements, alerts
+from app.routers import cameras, measurements, alerts, detection
+from app.detector_manager import detector_manager
 
 class QuietPollingFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -29,13 +30,18 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     initialize_camera_database(db)
     db.close()
-    monitor_task = asyncio.create_task(start_staleness_monitor(poll_interval=10))
-    yield
-    monitor_task.cancel()
+    monitor_task = None
     try:
-        await monitor_task
-    except asyncio.CancelledError:
-        pass
+        monitor_task = asyncio.create_task(start_staleness_monitor(poll_interval=10))
+        yield
+    finally:
+        detector_manager.stop()
+        if monitor_task is not None:
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
 
 app = FastAPI(title="PrivateTraffic Core API", version="1.0", lifespan=lifespan)
 
@@ -58,6 +64,7 @@ app.add_middleware(
 app.include_router(cameras.router)
 app.include_router(measurements.router)
 app.include_router(alerts.router)
+app.include_router(detection.router)
 
 if os.path.exists(UPLOAD_DIR):
     app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
