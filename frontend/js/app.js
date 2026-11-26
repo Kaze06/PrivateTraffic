@@ -375,7 +375,7 @@ async function updateDetectionStatus(cameraId) {
     } else if (status.state === "waiting_for_frame") {
       setDetectionNotice("No detection frames received", "Check that the camera is online and the detector can load.");
     } else if (status.state === "failed") {
-      setDetectionNotice("Vehicle detection stopped", `The detector exited with code ${status.exit_code}. Click Detection view to try again.`);
+      setDetectionNotice("Vehicle detection stopped", status.detail || `The detector exited with code ${status.exit_code}.`);
     } else if (status.state === "idle") {
       setDetectionNotice("Starting vehicle detection", "Connecting to the selected live camera.");
     }

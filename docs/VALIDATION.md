@@ -2,9 +2,11 @@
 
 ## Detection view auto-start (2026-11-26)
 
-Detection view calls the backend lifecycle API, which starts one `--receipt-time` worker, reuses it on repeated starts, follows camera changes through active focus, and stops it on Raw video or API shutdown. API tests cover process reuse, selected-camera focus, live-source validation, running/failed states and stop. Full suite: **157 passed**, with 13 existing Starlette/httpx deprecation warnings.
+Detection view calls the backend lifecycle API, which checks dependencies, starts one `--receipt-time` worker, reuses it on repeated starts, follows camera changes through active focus, and stops it on Raw video or API shutdown. API tests cover process reuse, selected-camera focus, live-source validation, missing packages, worker error detail, running/failed states and stop. Full suite: **158 passed**, with 13 existing Starlette/httpx deprecation warnings.
 
 Desktop and 390px mobile browser checks used mocked detection start/status/stop responses. They confirmed one start on entering Detection view, status feedback, one stop on returning to Raw video, no browser errors and no horizontal overflow. Screenshots: `artifacts/detection-autostart-desktop.png` and `artifacts/detection-autostart-mobile.png`. These checks did not start the detector or connect to a live feed; RF-DETR model loading and pilot camera behavior still need an on-device run.
+
+The preview runtime was then checked directly: its Python environment is missing `torch`, `torchvision`, `rfdetr` and `supervision`. Starting the worker directly reproduces `ModuleNotFoundError: No module named 'torch'`. The API now reports missing packages before spawning a worker; a browser check against the running preview confirms the error appears in Detection view without launching a process or opening a camera feed. Screenshot: `artifacts/detection-missing-deps-mobile.png`.
 
 ## Receipt-time live mode (2026-11-26)
 
