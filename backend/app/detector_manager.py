@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -8,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from app.video_stream import frame_metadata
+from app.video_stream import configure_worker_frame_dir, frame_metadata
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -34,7 +35,7 @@ class DetectorManager:
         self._process: Optional[subprocess.Popen] = None
         self._camera_id: Optional[str] = None
         self._started_at: Optional[float] = None
-        self._log_path = Path(tempfile.gettempdir()) / "private-traffic-detector-worker.log"
+        self._log_path = Path(tempfile.gettempdir()) / f"private-traffic-detector-worker-{os.getpid()}.log"
         self._log_handle = None
         self._last_error = None
 
@@ -46,6 +47,7 @@ class DetectorManager:
             if self._process is None:
                 env = os.environ.copy()
                 env["API_BASE_URL"] = api_base_url.rstrip("/")
+                env["FRAME_DIR"] = str(configure_worker_frame_dir())
                 options = {}
                 if os.name == "nt":
                     options["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -118,7 +120,8 @@ class DetectorManager:
             lines = [line.strip() for line in self._log_path.read_text(encoding="utf-8", errors="replace").splitlines()
                      if line.strip()]
             if lines:
-                self._last_error = lines[-1][-500:]
+                exceptions = [line for line in lines if re.match(r"^[\w.]+(?:Error|Exception):", line)]
+                self._last_error = (exceptions[-1] if exceptions else lines[-1])[-500:]
 
     def _close_log(self):
         if self._log_handle is not None:

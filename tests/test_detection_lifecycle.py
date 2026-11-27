@@ -13,6 +13,7 @@ from app.database import Base, get_db
 from app.detector_manager import DetectorManager
 from app.models import CameraSourceModel
 from app.routers import detection
+from app import video_stream
 
 
 class FakeProcess:
@@ -54,6 +55,7 @@ def test_manager_starts_once_reuses_worker_and_stops(monkeypatch):
     assert len(calls) == 1
     assert calls[0][0][-1] == "--receipt-time"
     assert calls[0][1]["env"]["API_BASE_URL"] == "http://127.0.0.1:8002"
+    assert Path(calls[0][1]["env"]["FRAME_DIR"]) == video_stream.SHM_DIR
     monkeypatch.setattr("app.detector_manager.frame_metadata", lambda camera_id: {"usable": True})
     assert manager.status("camera-b")["state"] == "running"
     assert manager.stop() == {"state": "idle", "camera_id": None}
@@ -67,14 +69,30 @@ def test_manager_reports_worker_exit(monkeypatch):
     monkeypatch.setattr("app.detector_manager.subprocess.Popen",
                         lambda *args, **kwargs: calls.append(kwargs) or process)
     manager.start("camera-a", "http://127.0.0.1:8000")
-    calls[0]["stdout"].write("Traceback (most recent call last)\nModuleNotFoundError: No module named 'torch'\n")
+    calls[0]["stdout"].write(
+        "Traceback (most recent call last)\n"
+        "PermissionError: [WinError 5] Access is denied\n"
+        "[https @ 000001] Error reading HTTP response: End of file\n"
+    )
     calls[0]["stdout"].flush()
     process.returncode = 2
 
     assert manager.status() == {
         "state": "failed", "camera_id": "camera-a", "exit_code": 2,
-        "detail": "ModuleNotFoundError: No module named 'torch'",
+        "detail": "PermissionError: [WinError 5] Access is denied",
     }
+
+
+def test_worker_frame_directories_are_isolated_by_api_process(monkeypatch, tmp_path):
+    monkeypatch.delenv("FRAME_DIR", raising=False)
+    monkeypatch.setattr(video_stream, "FRAME_ROOT", tmp_path)
+    monkeypatch.setattr(video_stream, "SHM_DIR", tmp_path)
+    first = video_stream.configure_worker_frame_dir(1001)
+    second = video_stream.configure_worker_frame_dir(1002)
+
+    assert first == tmp_path / "1001"
+    assert second == tmp_path / "1002"
+    assert first.is_dir() and second.is_dir()
 
 
 def test_detection_start_selects_live_camera_and_rejects_replay(monkeypatch):

@@ -7,8 +7,20 @@ from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-# All producers/consumers share this configurable directory; tests use isolated paths.
-SHM_DIR = Path(os.environ.get("FRAME_DIR", str(Path(tempfile.gettempdir()) / "private-traffic-frames")))
+FRAME_ROOT = Path(os.environ.get("FRAME_DIR", str(Path(tempfile.gettempdir()) / "private-traffic-frames")))
+SHM_DIR = FRAME_ROOT
+
+
+def configure_worker_frame_dir(instance_id=None):
+    """Give each API process its managed worker an isolated frame directory."""
+    global SHM_DIR
+    configured_dir = os.environ.get("FRAME_DIR")
+    if configured_dir:
+        SHM_DIR = Path(configured_dir)
+    else:
+        SHM_DIR = FRAME_ROOT / str(instance_id or os.getpid())
+    SHM_DIR.mkdir(parents=True, exist_ok=True)
+    return SHM_DIR
 
 
 def get_shm_frame_path(camera_id):
