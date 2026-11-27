@@ -223,7 +223,24 @@ def test_overlay_rewrite_cannot_refresh_old_source_time(monkeypatch, tmp_path):
     path.with_suffix(".json").write_text(json.dumps({
         "usable": True, "observed_at": (datetime.now(timezone.utc)-timedelta(seconds=61)).isoformat(),
         "written_at": time.time(), "is_replay": False, "sequence": "old"}))
+
+
     assert not video_stream.stream_manager.has_active_stream("test")
+def test_frame_update_does_not_replace_files_open_by_dashboard(monkeypatch, tmp_path):
+    import cv2
+
+    monkeypatch.setattr(video_stream, "SHM_DIR", tmp_path)
+    monkeypatch.setattr(cv2, "imencode", lambda *args, **kwargs: (True, SimpleNamespace(tobytes=lambda: b"jpeg")))
+    monkeypatch.setattr(Path, "replace", lambda *args: (_ for _ in ()).throw(PermissionError("file is open")))
+    packet = worker.SourceFrame(object(), datetime.now(timezone.utc), 1, False)
+
+    worker.write_shm_frame("test", object(), packet)
+
+    frame = video_stream.get_shm_frame_path("test")
+    assert frame.read_bytes() == b"jpeg"
+    assert video_stream.frame_metadata("test")["sequence"].endswith(":1")
+
+
 
 
 def test_cli_replay_setup_persists_time_then_real_worker_submission_succeeds(api, monkeypatch, tmp_path):

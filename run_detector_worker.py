@@ -267,15 +267,11 @@ def write_shm_frame(camera_id, image, packet):
         return
     path = get_shm_frame_path(camera_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_bytes(encoded.tobytes())
-    tmp.replace(path)
+    path.write_bytes(encoded.tobytes())
     meta = path.with_suffix(".json")
-    tmp = meta.with_suffix(".tmp.json")
-    tmp.write_text(json.dumps({"usable": True, "observed_at": packet.observed_at.isoformat(),
-                              "is_replay": packet.is_replay, "written_at": time.time(),
-                              "sequence": f"{packet.observed_at.isoformat()}:{packet.sequence}"}))
-    tmp.replace(meta)
+    meta.write_text(json.dumps({"usable": True, "observed_at": packet.observed_at.isoformat(),
+                                "is_replay": packet.is_replay, "written_at": time.time(),
+                                "sequence": f"{packet.observed_at.isoformat()}:{packet.sequence}"}))
 
 
 def get_camera_status(camera_id, session):
